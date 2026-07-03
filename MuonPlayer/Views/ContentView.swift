@@ -1,19 +1,36 @@
 import SwiftUI
 
 struct ContentView: View {
-    @Environment(AudioEngine.self) private var audioEngine
+    @Environment(Player.self) private var player
+    @State private var showNowPlaying = false
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        TabView {
             NavigationStack {
-                FileListView()
-                    .navigationTitle("Muon Player")
+                AlbumsView()
+                    .navigationTitle("Albums")
             }
+            .tabItem { Label("Albums", systemImage: "square.stack") }
 
-            if audioEngine.currentTrack != nil {
-                NowPlayingView()
-                    .padding(.bottom)
+            NavigationStack {
+                SongsView()
+                    .navigationTitle("Songs")
             }
+            .tabItem { Label("Songs", systemImage: "music.note.list") }
+
+            NavigationStack {
+                SearchView()
+                    .navigationTitle("Search")
+            }
+            .tabItem { Label("Search", systemImage: "magnifyingglass") }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if player.currentTrack != nil {
+                MiniPlayer(onTap: { showNowPlaying = true })
+            }
+        }
+        .sheet(isPresented: $showNowPlaying) {
+            NowPlayingView()
         }
     }
 }

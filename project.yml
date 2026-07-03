@@ -5,7 +5,7 @@ options:
     iOS: "17.0"
   xcodeVersion: "16.0"
 settings:
-  SWIFT_VERSION: "6.0"
+  SWIFT_VERSION: "5.0"
   IPHONEOS_DEPLOYMENT_TARGET: "17.0"
 targets:
   MuonPlayer:
@@ -31,9 +31,27 @@ targets:
           - audio
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+    dependencies:
+      - framework: Vendor/FFmpeg/libavcodec.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libavformat.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libavutil.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libswresample.xcframework
+        embed: false
+      - sdk: libz.tbd
+      - sdk: libbz2.tbd
+      - sdk: libiconv.tbd
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.muonplayer.app
-      SWIFT_STRICT_CONCURRENCY: complete
+      HEADER_SEARCH_PATHS:
+        - $(SRCROOT)/Vendor/FFmpeg/include
+      OTHER_SWIFT_FLAGS:
+        - -Xcc
+        - -fmodule-map-file=$(SRCROOT)/Vendor/FFmpeg/include/module.modulemap
+        - -Xcc
+        - -I$(SRCROOT)/Vendor/FFmpeg/include
   MuonPlayerTests:
     type: bundle.unit-test
     platform: iOS
@@ -44,3 +62,10 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.muonplayer.tests
       GENERATE_INFOPLIST_FILE: true
+      HEADER_SEARCH_PATHS:
+        - $(SRCROOT)/Vendor/FFmpeg/include
+      OTHER_SWIFT_FLAGS:
+        - -Xcc
+        - -fmodule-map-file=$(SRCROOT)/Vendor/FFmpeg/include/module.modulemap
+        - -Xcc
+        - -I$(SRCROOT)/Vendor/FFmpeg/include
