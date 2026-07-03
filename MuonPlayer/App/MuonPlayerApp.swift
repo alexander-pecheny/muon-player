@@ -13,14 +13,12 @@ struct MuonPlayerApp: App {
         // Build the object graph. LibraryStore owns the database; the scrobbler
         // shares it so scrobbles land in the same SQLite file.
         let lib = LibraryStore()
-        let credentials = LastFMClient.Credentials(
-            apiKey: Secrets.lastFMApiKey,
-            apiSecret: Secrets.lastFMApiSecret,
-            username: Secrets.lastFMUsername,
-            password: Secrets.lastFMPassword
-        )
         _library = State(initialValue: lib)
-        _scrobbler = State(initialValue: ScrobbleService(database: lib.database, credentials: credentials))
+        _scrobbler = State(initialValue: ScrobbleService(
+            database: lib.database,
+            apiKey: Secrets.lastFMApiKey,
+            apiSecret: Secrets.lastFMApiSecret
+        ))
     }
 
     var body: some Scene {
@@ -49,6 +47,12 @@ struct MuonPlayerApp: App {
                     }
                     if ArtworkSelfTest.isEnabled {
                         await ArtworkSelfTest.run(library: library)
+                    }
+                    if ProcessInfo.processInfo.environment["MUON_LOGIN_TEST"] != nil {
+                        let ok = await scrobbler.logIn(username: Secrets.lastFMUsername, password: Secrets.lastFMPassword)
+                        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                        try? "ok=\(ok) loggedIn=\(scrobbler.isLoggedIn) user=\(scrobbler.username ?? "nil") err=\(scrobbler.lastError ?? "none")"
+                            .write(to: docs.appendingPathComponent("login.done"), atomically: true, encoding: .utf8)
                     }
                 }
         }

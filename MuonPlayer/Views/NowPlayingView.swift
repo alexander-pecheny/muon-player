@@ -53,6 +53,15 @@ struct NowPlayingView: View {
         }
     }
 
+    // Both labels derive from the same integer second so they update in lockstep
+    // (otherwise elapsed and remaining tick at different sub-second offsets).
+    private var elapsedSeconds: Int {
+        Int((isSeeking ? seekPosition : player.currentTime).rounded(.down))
+    }
+    private var remainingSeconds: Int {
+        max(0, Int(player.duration.rounded()) - elapsedSeconds)
+    }
+
     private var seekBar: some View {
         VStack(spacing: 2) {
             Slider(
@@ -68,9 +77,9 @@ struct NowPlayingView: View {
                 }
             }
             HStack {
-                Text(formatDuration(isSeeking ? seekPosition : player.currentTime))
+                Text(formatDuration(Double(elapsedSeconds)))
                 Spacer()
-                Text("-" + formatDuration(max(0, player.duration - (isSeeking ? seekPosition : player.currentTime))))
+                Text("-" + formatDuration(Double(remainingSeconds)))
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
