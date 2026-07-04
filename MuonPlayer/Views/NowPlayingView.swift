@@ -1,91 +1,105 @@
 import SwiftUI
 
 struct NowPlayingView: View {
-    @Environment(AudioEngine.self) private var audioEngine
+    @Environment(Player.self) private var player
+    @Environment(\.dismiss) private var dismiss
     @State private var seekPosition: Double = 0
     @State private var isSeeking = false
+    @State private var showQueue = false
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Track info
-            if let track = audioEngine.currentTrack {
-                VStack(spacing: 2) {
-                    Text(track.title)
-                        .font(.headline)
-                        .lineLimit(1)
+        VStack(spacing: 24) {
+            Capsule().fill(.secondary).frame(width: 40, height: 5).padding(.top, 8)
 
-                    if let artist = track.artist {
-                        Text(artist)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-            }
+            artwork
+                .aspectRatio(1, contentMode: .fit)
+                .frame(maxWidth: 340)
+                .shadow(radius: 16, y: 8)
+                .padding(.horizontal)
 
-            // Seek slider
             VStack(spacing: 4) {
-                Slider(
-                    value: isSeeking ? $seekPosition : .constant(audioEngine.currentTime),
-                    in: 0...max(audioEngine.duration, 1)
-                ) { editing in
-                    if editing {
-                        isSeeking = true
-                        seekPosition = audioEngine.currentTime
-                    } else {
-                        audioEngine.seek(to: seekPosition)
-                        isSeeking = false
-                    }
-                }
-
-                HStack {
-                    Text(formatTime(isSeeking ? seekPosition : audioEngine.currentTime))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-
-                    Spacer()
-
-                    Text(formatTime(audioEngine.duration))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                Text(player.currentTrack?.title ?? "Not Playing")
+                    .font(.title2.bold()).lineLimit(2).multilineTextAlignment(.center)
+                Text(player.currentTrack?.displayArtist ?? "")
+                    .font(.title3).foregroundStyle(.secondary).lineLimit(1)
+                if let album = player.currentTrack?.album {
+                    Text(album).font(.subheadline).foregroundStyle(.tertiary).lineLimit(1)
                 }
             }
+            .padding(.horizontal)
 
-            // Playback controls
-            HStack(spacing: 40) {
-                Button { audioEngine.previous() } label: {
-                    Image(systemName: "backward.fill")
-                        .font(.title2)
-                }
+            seekBar
+            controls
 
-                Button {
-                    if audioEngine.isPlaying {
-                        audioEngine.pause()
-                    } else {
-                        audioEngine.resume()
-                    }
-                } label: {
-                    Image(systemName: audioEngine.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title)
-                }
-
-                Button { audioEngine.next() } label: {
-                    Image(systemName: "forward.fill")
-                        .font(.title2)
-                }
+            Button { showQueue = true } label: {
+                Label(player.upNext.isEmpty ? "Queue" : "Queue (\(player.upNext.count))",
+                      systemImage: "list.bullet")
             }
+            .buttonStyle(.bordered)
+
+            Spacer(minLength: 0)
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.bottom)
+        .presentationDragIndicator(.hidden)
+        .sheet(isPresented: $showQueue) { QueueView() }
+    }
+
+    @ViewBuilder private var artwork: some View {
+        if let art = player.currentArtwork {
+            Image(uiImage: art).resizable().aspectRatio(contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+        } else {
+            ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 16)
+        }
+    }
+
+    // Both labels derive from the same integer second so they update in lockstep
+    // (otherwise elapsed and remaining tick at different sub-second offsets).
+    private var elapsedSeconds: Int {
+        Int((isSeeking ? seekPosition : player.currentTime).rounded(.down))
+    }
+    private var remainingSeconds: Int {
+        max(0, Int(player.duration.rounded()) - elapsedSeconds)
+    }
+
+    private var seekBar: some View {
+        VStack(spacing: 2) {
+            Slider(
+                value: isSeeking ? $seekPosition : .constant(player.currentTime),
+                in: 0...max(player.duration, 1)
+            ) { editing in
+                if editing {
+                    isSeeking = true
+                    seekPosition = player.currentTime
+                } else {
+                    player.seek(to: seekPosition)
+                    isSeeking = false
+                }
+            }
+            HStack {
+                Text(formatDuration(Double(elapsedSeconds)))
+                Spacer()
+                Text("-" + formatDuration(Double(remainingSeconds)))
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
         .padding(.horizontal)
     }
 
-    private func formatTime(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite && seconds >= 0 else { return "0:00" }
-        let mins = Int(seconds) / 60
-        let secs = Int(seconds) % 60
-        return String(format: "%d:%02d", mins, secs)
+    private var controls: some View {
+        HStack(spacing: 44) {
+            Button { player.previous() } label: {
+                Image(systemName: "backward.fill").font(.title)
+            }
+            Button { player.togglePlayPause() } label: {
+                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 64))
+            }
+            Button { player.next() } label: {
+                Image(systemName: "forward.fill").font(.title)
+            }
+        }
+        .foregroundStyle(.primary)
     }
 }

@@ -30,3 +30,12 @@ Pods/
 .DS_Store
 *.swp
 *~
+.ffmpeg-build/
+
+# Secrets (generated from .env)
+MuonPlayer/Secrets.swift
+
+# Local secrets & test artifacts
+.env
+.testaudio/
+.ffmpeg-build.log
