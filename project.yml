@@ -1,6 +1,6 @@
 name: MuonPlayer
 options:
-  bundleIdPrefix: com.muonplayer
+  bundleIdPrefix: me.pecheny
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
@@ -44,7 +44,8 @@ targets:
       - sdk: libbz2.tbd
       - sdk: libiconv.tbd
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.muonplayer.app
+      PRODUCT_BUNDLE_IDENTIFIER: me.pecheny.muonplayer
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       HEADER_SEARCH_PATHS:
         - $(SRCROOT)/Vendor/FFmpeg/include
       OTHER_SWIFT_FLAGS:
@@ -60,7 +61,7 @@ targets:
     dependencies:
       - target: MuonPlayer
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.muonplayer.tests
+      PRODUCT_BUNDLE_IDENTIFIER: me.pecheny.muonplayer.tests
       GENERATE_INFOPLIST_FILE: true
       HEADER_SEARCH_PATHS:
         - $(SRCROOT)/Vendor/FFmpeg/include

@@ -14,6 +14,35 @@ struct Album: Identifiable, Sendable, Hashable {
     let artworkPath: String?
 }
 
+/// A locally-played history entry with its scrobble outcome.
+struct HistoryEntry: Identifiable, Sendable {
+    enum ScrobbleState: String, Sendable {
+        case scrobbled, pending, ineligible
+    }
+    let id: Int64
+    let artist: String
+    let album: String?
+    let title: String
+    let playedAt: Int          // unix seconds
+    let scrobbleState: ScrobbleState
+}
+
+/// Fields a user can override via tag editing (stored in the DB, layered over
+/// the file's own tags so the source files are never modified).
+struct TagEdits: Sendable {
+    var title: String?
+    var artist: String?
+    var album: String?
+    var albumArtist: String?
+    var trackNo: Int?
+    var composer: String?
+}
+
+/// The current metadata-reading logic version. Bump to force a full re-read of
+/// every file on next launch (used to repair libraries scanned by a buggy
+/// reader — e.g. the AV_DICT_IGNORE_SUFFIX album/album_artist collision).
+let kScannerVersion: Int32 = 4
+
 /// A pending or completed scrobble row.
 struct ScrobbleRow: Sendable {
     let id: Int64
@@ -64,6 +93,19 @@ actor Database {
         );
         """)
 
+        // Columns added after the initial schema. Each is nullable so older DBs
+        // upgrade in place without a rebuild.
+        addColumn("tracks", "composer", "TEXT")
+        addColumn("tracks", "bitrate", "INTEGER")
+        addColumn("tracks", "codec", "TEXT")
+        // User tag overrides (never touched by the file scanner).
+        addColumn("tracks", "ov_title", "TEXT")
+        addColumn("tracks", "ov_artist", "TEXT")
+        addColumn("tracks", "ov_album", "TEXT")
+        addColumn("tracks", "ov_album_artist", "TEXT")
+        addColumn("tracks", "ov_composer", "TEXT")
+        addColumn("tracks", "ov_track_no", "INTEGER")
+
         // Unicode-aware, case- and diacritic-insensitive full-text index.
         exec("""
         CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
@@ -105,6 +147,47 @@ actor Database {
         );
         """)
         exec("CREATE INDEX IF NOT EXISTS idx_scrobbles_pending ON scrobbles(is_scrobbled);")
+
+        // Unlimited local play history. `scrobble_state` records the eligibility
+        // outcome at play time: scrobbled / pending / ineligible.
+        exec("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY,
+            path TEXT,
+            artist TEXT NOT NULL,
+            album TEXT,
+            title TEXT NOT NULL,
+            played_at INTEGER NOT NULL,
+            scrobble_state TEXT NOT NULL DEFAULT 'ineligible',
+            scrobble_id INTEGER
+        );
+        """)
+        exec("CREATE INDEX IF NOT EXISTS idx_history_played ON history(played_at DESC);")
+    }
+
+    /// Add a column if the table doesn't already have it (poor-man's migration).
+    private func addColumn(_ table: String, _ name: String, _ type: String) {
+        guard let stmt = prepare("PRAGMA table_info(\(table))") else { return }
+        var exists = false
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(stmt, 1), String(cString: c) == name { exists = true; break }
+        }
+        sqlite3_finalize(stmt)
+        if !exists { exec("ALTER TABLE \(table) ADD COLUMN \(name) \(type);") }
+    }
+
+    // MARK: - Scanner version
+
+    /// PRAGMA user_version stores the scanner version the DB was last populated
+    /// with. If it lags `kScannerVersion`, the store forces a full re-read.
+    func scannerVersion() -> Int32 {
+        guard let stmt = prepare("PRAGMA user_version") else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        return sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int(stmt, 0) : 0
+    }
+
+    func setScannerVersion(_ v: Int32) {
+        exec("PRAGMA user_version = \(v);")
     }
 
     // MARK: - Track ingestion
@@ -112,13 +195,17 @@ actor Database {
     /// Insert or update a track by path. Returns the row id.
     @discardableResult
     func upsertTrack(path: String, meta: TrackMetadata, hasArtwork: Bool, mtime: Double) -> Int64? {
+        // Only file-derived columns are written here; ov_* override columns are
+        // deliberately left untouched so user tag edits survive rescans.
         let sql = """
-        INSERT INTO tracks (path, title, artist, album, album_artist, track_no, disc_no, duration, year, has_artwork, date_added, mtime)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO tracks (path, title, artist, album, album_artist, composer, track_no, disc_no, duration, bitrate, codec, year, has_artwork, date_added, mtime)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(path) DO UPDATE SET
             title=excluded.title, artist=excluded.artist, album=excluded.album,
-            album_artist=excluded.album_artist, track_no=excluded.track_no, disc_no=excluded.disc_no,
-            duration=excluded.duration, year=excluded.year, has_artwork=excluded.has_artwork, mtime=excluded.mtime;
+            album_artist=excluded.album_artist, composer=excluded.composer,
+            track_no=excluded.track_no, disc_no=excluded.disc_no,
+            duration=excluded.duration, bitrate=excluded.bitrate, codec=excluded.codec,
+            year=excluded.year, has_artwork=excluded.has_artwork, mtime=excluded.mtime;
         """
         guard let stmt = prepare(sql) else { return nil }
         defer { sqlite3_finalize(stmt) }
@@ -128,13 +215,16 @@ actor Database {
         bindText(stmt, 3, meta.artist)
         bindText(stmt, 4, meta.album)
         bindText(stmt, 5, meta.albumArtist)
-        bindInt(stmt, 6, meta.trackNo)
-        bindInt(stmt, 7, meta.discNo)
-        bindDouble(stmt, 8, meta.duration)
-        bindInt(stmt, 9, nil)
-        sqlite3_bind_int(stmt, 10, hasArtwork ? 1 : 0)
-        sqlite3_bind_double(stmt, 11, Date().timeIntervalSince1970)
-        sqlite3_bind_double(stmt, 12, mtime)
+        bindText(stmt, 6, meta.composer)
+        bindInt(stmt, 7, meta.trackNo)
+        bindInt(stmt, 8, meta.discNo)
+        bindDouble(stmt, 9, meta.duration)
+        bindInt(stmt, 10, meta.bitrate)
+        bindText(stmt, 11, meta.codec)
+        bindInt(stmt, 12, meta.year)
+        sqlite3_bind_int(stmt, 13, hasArtwork ? 1 : 0)
+        sqlite3_bind_double(stmt, 14, Date().timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 15, mtime)
         guard sqlite3_step(stmt) == SQLITE_DONE else { return nil }
         return sqlite3_last_insert_rowid(db)
     }
@@ -179,10 +269,23 @@ actor Database {
 
     // MARK: - Queries
 
+    // Effective (override-aware) field expressions used across queries. An empty
+    // override string counts as "no override" so clearing an edit is possible.
+    // Base columns are qualified with `tracks.` so the FTS JOIN in search()
+    // (whose virtual table also has title/artist/album columns) stays unambiguous.
+    private let effTitle = "COALESCE(NULLIF(tracks.ov_title,''), tracks.title)"
+    private let effArtist = "COALESCE(NULLIF(tracks.ov_artist,''), tracks.artist)"
+    private let effAlbumArtist = "COALESCE(NULLIF(tracks.ov_album_artist,''), tracks.album_artist)"
+    private let effComposer = "COALESCE(NULLIF(tracks.ov_composer,''), tracks.composer)"
+    private let effTrackNo = "COALESCE(tracks.ov_track_no, tracks.track_no)"
+    private let effAlbum = "COALESCE(NULLIF(tracks.ov_album,''), tracks.album)"
+    private let effAlbumArtistGroup = "COALESCE(NULLIF(tracks.ov_album_artist,''), NULLIF(tracks.album_artist,''), NULLIF(tracks.ov_artist,''), NULLIF(tracks.artist,''), 'Unknown Artist')"
+    private let effAlbumGroup = "COALESCE(NULLIF(tracks.ov_album,''), NULLIF(tracks.album,''), 'Unknown Album')"
+
     func albums() -> [Album] {
         let sql = """
-        SELECT COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist') AS aa,
-               COALESCE(NULLIF(album,''), 'Unknown Album') AS al,
+        SELECT \(effAlbumArtistGroup) AS aa,
+               \(effAlbumGroup) AS al,
                COUNT(*) AS cnt,
                MAX(year),
                MAX(CASE WHEN has_artwork=1 THEN path END)
@@ -208,9 +311,9 @@ actor Database {
     func tracks(inAlbum album: Album) -> [Track] {
         let sql = """
         SELECT \(trackColumns) FROM tracks
-        WHERE COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown Artist') = ?
-          AND COALESCE(NULLIF(album,''), 'Unknown Album') = ?
-        ORDER BY disc_no, track_no, title COLLATE NOCASE;
+        WHERE \(effAlbumArtistGroup) = ?
+          AND \(effAlbumGroup) = ?
+        ORDER BY disc_no, \(effTrackNo), \(effTitle) COLLATE NOCASE;
         """
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
@@ -220,10 +323,50 @@ actor Database {
     }
 
     func allTracks() -> [Track] {
-        let sql = "SELECT \(trackColumns) FROM tracks ORDER BY title COLLATE NOCASE;"
+        let sql = "SELECT \(trackColumns) FROM tracks ORDER BY \(effTitle) COLLATE NOCASE;"
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
         return readTracks(stmt)
+    }
+
+    /// All tracks under a Documents-relative top folder (the artist folder).
+    /// Matched via `%/Documents/<folder>/%` so it's robust to `/var` vs
+    /// `/private/var` and to app-container UUID changes. Used by the playhead.
+    func tracks(underRelativeTopFolder folder: String) -> [Track] {
+        let sql = """
+        SELECT \(trackColumns) FROM tracks
+        WHERE path LIKE ? ESCAPE '\\'
+        ORDER BY path COLLATE NOCASE;
+        """
+        guard let stmt = prepare(sql) else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, "%/Documents/" + escapeLike(folder + "/") + "%")
+        return readTracks(stmt)
+    }
+
+    /// Library tracks that are direct children of a Documents-relative folder
+    /// (used by the Folders browser). `rel` is "" for the Documents root. Matched
+    /// via `%/Documents/<rel>/…` so it's robust to `/var` vs `/private/var` and
+    /// container-UUID changes.
+    func tracks(inRelativeFolder rel: String) -> [Track] {
+        let base = rel.isEmpty ? "" : (rel.hasSuffix("/") ? rel : rel + "/")
+        let prefix = "%/Documents/" + escapeLike(base)
+        let sql = """
+        SELECT \(trackColumns) FROM tracks
+        WHERE path LIKE ? ESCAPE '\\' AND path NOT LIKE ? ESCAPE '\\'
+        ORDER BY path COLLATE NOCASE;
+        """
+        guard let stmt = prepare(sql) else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, prefix + "%")
+        bindText(stmt, 2, prefix + "%/%")
+        return readTracks(stmt)
+    }
+
+    private func escapeLike(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "%", with: "\\%")
+         .replacingOccurrences(of: "_", with: "\\_")
     }
 
     /// Instant search over title/artist/album. Case- and diacritic-insensitive,
@@ -253,8 +396,11 @@ actor Database {
         return tokens.map { "\"\($0)\"*" }.joined(separator: " ")
     }
 
-    // Fully qualified so the FTS JOIN in search() doesn't hit ambiguous columns.
-    private let trackColumns = "tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.album_artist, tracks.track_no, tracks.disc_no, tracks.duration, tracks.has_artwork"
+    // Fully qualified / effective columns so the FTS JOIN in search() doesn't
+    // hit ambiguous columns and so user overrides are applied on read.
+    private var trackColumns: String {
+        "tracks.id, tracks.path, \(effTitle), \(effArtist), \(effAlbum), \(effAlbumArtist), \(effComposer), \(effTrackNo), tracks.disc_no, tracks.duration, tracks.bitrate, tracks.codec, tracks.has_artwork"
+    }
 
     private func readTracks(_ stmt: OpaquePointer) -> [Track] {
         var tracks: [Track] = []
@@ -268,10 +414,13 @@ actor Database {
                 artist: columnText(stmt, 3),
                 album: columnText(stmt, 4),
                 albumArtist: columnText(stmt, 5),
-                trackNo: columnInt(stmt, 6),
-                discNo: columnInt(stmt, 7),
-                duration: sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 8),
-                hasArtwork: sqlite3_column_int64(stmt, 9) == 1
+                composer: columnText(stmt, 6),
+                trackNo: columnInt(stmt, 7),
+                discNo: columnInt(stmt, 8),
+                duration: sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 9),
+                bitrate: columnInt(stmt, 10),
+                codec: columnText(stmt, 11),
+                hasArtwork: sqlite3_column_int64(stmt, 12) == 1
             ))
         }
         return tracks
@@ -320,6 +469,107 @@ actor Database {
         guard let stmt = prepare("SELECT COUNT(*) FROM scrobbles WHERE is_scrobbled=0") else { return 0 }
         defer { sqlite3_finalize(stmt) }
         return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+    }
+
+    // MARK: - Tag editing (non-destructive overrides)
+
+    /// Apply overrides to a single track. A non-nil field is written as-is (an
+    /// empty string clears the override); a nil field is left unchanged.
+    func setTrackOverrides(id: Int64, _ edits: TagEdits) {
+        var sets: [String] = []
+        var binders: [(OpaquePointer) -> Void] = []
+        func str(_ col: String, _ v: String?) {
+            guard let v else { return }
+            sets.append("\(col)=?")
+            binders.append { self.bindText($0, Int32(binders.count + 1), v) }
+        }
+        str("ov_title", edits.title)
+        str("ov_artist", edits.artist)
+        str("ov_album", edits.album)
+        str("ov_album_artist", edits.albumArtist)
+        str("ov_composer", edits.composer)
+        if let t = edits.trackNo {
+            sets.append("ov_track_no=?")
+            binders.append { self.bindInt($0, Int32(binders.count + 1), t) }
+        }
+        guard !sets.isEmpty else { return }
+        let sql = "UPDATE tracks SET \(sets.joined(separator: ", ")) WHERE id=?;"
+        guard let stmt = prepare(sql) else { return }
+        defer { sqlite3_finalize(stmt) }
+        for b in binders { b(stmt) }
+        sqlite3_bind_int64(stmt, Int32(binders.count + 1), id)
+        sqlite3_step(stmt)
+    }
+
+    /// Apply album-wide overrides (album title / artist / album-artist / composer)
+    /// to every track currently grouped under `album`.
+    func setAlbumOverrides(album: Album, _ edits: TagEdits) {
+        let ids = trackIDs(inAlbum: album)
+        for id in ids { setTrackOverrides(id: id, edits) }
+    }
+
+    private func trackIDs(inAlbum album: Album) -> [Int64] {
+        let sql = """
+        SELECT tracks.id FROM tracks
+        WHERE \(effAlbumArtistGroup) = ? AND \(effAlbumGroup) = ?;
+        """
+        guard let stmt = prepare(sql) else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, album.artist)
+        bindText(stmt, 2, album.title)
+        var ids: [Int64] = []
+        while sqlite3_step(stmt) == SQLITE_ROW { ids.append(sqlite3_column_int64(stmt, 0)) }
+        return ids
+    }
+
+    // MARK: - Play history
+
+    func insertHistory(path: String?, artist: String, album: String?, title: String,
+                       playedAt: Int, state: HistoryEntry.ScrobbleState) {
+        guard let stmt = prepare("INSERT INTO history (path, artist, album, title, played_at, scrobble_state) VALUES (?,?,?,?,?,?)") else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, path)
+        bindText(stmt, 2, artist)
+        bindText(stmt, 3, album)
+        bindText(stmt, 4, title)
+        sqlite3_bind_int64(stmt, 5, Int64(playedAt))
+        bindText(stmt, 6, state.rawValue)
+        sqlite3_step(stmt)
+    }
+
+    /// Mark the most recent matching history row as scrobbled once Last.fm accepts
+    /// it (pending → scrobbled).
+    func markHistoryScrobbled(artist: String, title: String, playedAt: Int) {
+        guard let stmt = prepare("""
+        UPDATE history SET scrobble_state='scrobbled'
+        WHERE id = (SELECT id FROM history WHERE artist=? AND title=? AND ABS(played_at-?)<=2 AND scrobble_state='pending'
+                    ORDER BY ABS(played_at-?) LIMIT 1);
+        """) else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, artist)
+        bindText(stmt, 2, title)
+        sqlite3_bind_int64(stmt, 3, Int64(playedAt))
+        sqlite3_bind_int64(stmt, 4, Int64(playedAt))
+        sqlite3_step(stmt)
+    }
+
+    func history(limit: Int = 1000) -> [HistoryEntry] {
+        let sql = "SELECT id, artist, album, title, played_at, scrobble_state FROM history ORDER BY played_at DESC, id DESC LIMIT ?;"
+        guard let stmt = prepare(sql) else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var rows: [HistoryEntry] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(HistoryEntry(
+                id: sqlite3_column_int64(stmt, 0),
+                artist: String(cString: sqlite3_column_text(stmt, 1)),
+                album: columnText(stmt, 2),
+                title: String(cString: sqlite3_column_text(stmt, 3)),
+                playedAt: Int(sqlite3_column_int64(stmt, 4)),
+                scrobbleState: HistoryEntry.ScrobbleState(rawValue: columnText(stmt, 5) ?? "ineligible") ?? .ineligible
+            ))
+        }
+        return rows
     }
 
     // MARK: - Low-level helpers

@@ -23,6 +23,20 @@ final class QueueCore: @unchecked Sendable {
     private var index: Int = -1
     private var queue: [QueuedItem] = []
 
+    // Order behaviour set by Player from the current PlaybackMode. Defaults keep
+    // the plain linear "walk the context and stop at the end" contract.
+    private var _loops = false      // wrap past the ends of the context
+    private var _repeatOne = false  // stay on the current track
+
+    var loops: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _loops }
+        set { lock.lock(); _loops = newValue; lock.unlock() }
+    }
+    var repeatOne: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _repeatOne }
+        set { lock.lock(); _repeatOne = newValue; lock.unlock() }
+    }
+
     // MARK: Setup
 
     /// Replace the context and point at `startIndex`. Returns the track to play.
@@ -36,7 +50,8 @@ final class QueueCore: @unchecked Sendable {
 
     // MARK: Advancing
 
-    /// The next track to play, honoring the explicit queue first (foobar rule).
+    /// The next track to play, honoring the explicit queue first (foobar rule),
+    /// then the current mode (repeat-one / loop).
     func advance() -> Track? {
         lock.lock(); defer { lock.unlock() }
         if !queue.isEmpty {
@@ -45,27 +60,51 @@ final class QueueCore: @unchecked Sendable {
             index = item.index
             return item.track
         }
+        if _repeatOne, context.indices.contains(index) {
+            return context[index]
+        }
         let next = index + 1
-        guard context.indices.contains(next) else { return nil }
-        index = next
-        return context[next]
+        if context.indices.contains(next) {
+            index = next
+            return context[next]
+        }
+        if _loops, !context.isEmpty {
+            index = 0
+            return context[0]
+        }
+        return nil
     }
 
     /// Peek what `advance()` would return, without mutating state.
     func peekNext() -> Track? {
         lock.lock(); defer { lock.unlock() }
         if let first = queue.first { return first.track }
+        if _repeatOne, context.indices.contains(index) { return context[index] }
         let next = index + 1
-        return context.indices.contains(next) ? context[next] : nil
+        if context.indices.contains(next) { return context[next] }
+        if _loops, !context.isEmpty { return context[0] }
+        return nil
     }
 
     /// Previous track within the current context (ignores the queue).
     func previous() -> Track? {
         lock.lock(); defer { lock.unlock() }
         let prev = index - 1
-        guard context.indices.contains(prev) else { return nil }
-        index = prev
-        return context[prev]
+        if context.indices.contains(prev) {
+            index = prev
+            return context[prev]
+        }
+        if _loops, !context.isEmpty {
+            index = context.count - 1
+            return context[index]
+        }
+        return nil
+    }
+
+    /// Current context + cursor snapshot (for rebuilding the timeline in place).
+    func currentContext() -> (tracks: [Track], index: Int) {
+        lock.lock(); defer { lock.unlock() }
+        return (context, index)
     }
 
     // MARK: Queue editing

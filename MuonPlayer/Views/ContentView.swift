@@ -2,17 +2,29 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(Player.self) private var player
+    @Environment(TabSettings.self) private var tabSettings
     @State private var showNowPlaying = false
+    @State private var selection: AppTab = .albums
+    @State private var didInitSelection = false
 
     var body: some View {
         content
             .sheet(isPresented: $showNowPlaying) { NowPlayingView() }
+            .onAppear {
+                if !didInitSelection {
+                    didInitSelection = true
+                    if let first = tabSettings.order.first { selection = first }
+                }
+            }
     }
 
+    // IMPORTANT: the mini-player modifier is applied UNCONDITIONALLY (the
+    // playing-check lives *inside* the accessory/inset content). Wrapping the
+    // whole TabView in `if playing { … } else { … }` changes its structural
+    // identity the first time a track starts, which reset the tab selection and
+    // popped any pushed navigation. Keeping the modifier constant avoids that.
     @ViewBuilder private var content: some View {
         if #available(iOS 26.0, *) {
-            // Native bottom accessory keeps the tab bar visible above the
-            // mini player (like Apple Music's liquid-glass now-playing bar).
             tabs.tabViewBottomAccessory {
                 if player.currentTrack != nil {
                     MiniAccessory(onTap: { showNowPlaying = true })
@@ -28,26 +40,26 @@ struct ContentView: View {
     }
 
     private var tabs: some View {
-        TabView {
-            NavigationStack {
-                AlbumsView().navigationTitle("Albums")
+        TabView(selection: $selection) {
+            ForEach(tabSettings.order) { tab in
+                tabContent(tab)
+                    .tabItem { Label(tab.title, systemImage: tab.systemImage) }
+                    .tag(tab)
             }
-            .tabItem { Label("Albums", systemImage: "square.stack") }
+        }
+    }
 
-            NavigationStack {
-                SongsView().navigationTitle("Songs")
+    @ViewBuilder private func tabContent(_ tab: AppTab) -> some View {
+        NavigationStack {
+            switch tab {
+            case .albums: AlbumsView().navigationTitle("Albums")
+            case .artists: ArtistsView().navigationTitle("Artists")
+            case .songs: SongsView().navigationTitle("Songs")
+            case .folders: FoldersView().navigationTitle("Folders")
+            case .search: SearchView().navigationTitle("Search")
+            case .history: HistoryView().navigationTitle("History")
+            case .settings: SettingsView().navigationTitle("Settings")
             }
-            .tabItem { Label("Songs", systemImage: "music.note.list") }
-
-            NavigationStack {
-                SearchView().navigationTitle("Search")
-            }
-            .tabItem { Label("Search", systemImage: "magnifyingglass") }
-
-            NavigationStack {
-                SettingsView().navigationTitle("Settings")
-            }
-            .tabItem { Label("Settings", systemImage: "gearshape") }
         }
     }
 }
@@ -73,6 +85,10 @@ private struct MiniAccessory: View {
             }
             Spacer(minLength: 4)
 
+            Button { player.previous() } label: {
+                Image(systemName: "backward.fill").font(.title3)
+            }
+            .buttonStyle(.plain)
             Button { player.togglePlayPause() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.title3)
             }

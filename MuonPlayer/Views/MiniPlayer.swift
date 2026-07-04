@@ -18,6 +18,9 @@ struct MiniPlayer: View {
             }
             Spacer()
 
+            Button { player.previous() } label: {
+                Image(systemName: "backward.fill").font(.title3)
+            }
             Button { player.togglePlayPause() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.title3)
@@ -26,6 +29,7 @@ struct MiniPlayer: View {
                 Image(systemName: "forward.fill").font(.title3)
             }
         }
+        .buttonStyle(.plain)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)

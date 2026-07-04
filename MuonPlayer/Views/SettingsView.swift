@@ -66,6 +66,14 @@ struct SettingsView: View {
             } footer: {
                 Text("Add music via the Files app under **On My iPhone → MuonPlayer**.")
             }
+
+            Section("Appearance") {
+                NavigationLink {
+                    TabsReorderView()
+                } label: {
+                    Label("Tab Order", systemImage: "square.grid.2x2")
+                }
+            }
         }
     }
 }

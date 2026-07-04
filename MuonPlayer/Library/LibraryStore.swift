@@ -14,6 +14,11 @@ final class LibraryStore {
     let database: Database
     private let scanner: FileScanner
 
+    /// Root folder of the music library (topmost folder = artist, per playhead).
+    /// Symlinks are resolved so its path matches the `/private/var/…` form stored
+    /// for track files (otherwise folder/playhead path prefixes never match).
+    var rootURL: URL { scanner.rootURL.resolvingSymlinksInPath() }
+
     init(rootURL: URL? = nil) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
@@ -34,6 +39,11 @@ final class LibraryStore {
         isScanning = true
         defer { isScanning = false; scanProgress = nil }
 
+        // If the metadata-reading logic changed since this DB was populated,
+        // re-read every file (repairs libraries scanned by the buggy tag reader).
+        let dbVersion = await database.scannerVersion()
+        let forceReadAll = dbVersion < kScannerVersion
+
         let files = scanner.findAudioFiles()
         let known = await database.knownPathsWithMtime()
         let existingPaths = Set(files.map { $0.path })
@@ -46,7 +56,7 @@ final class LibraryStore {
             processed += 1
             defer { scanProgress = (processed, files.count) }
 
-            if let knownMtime = known[path], abs(knownMtime - (mtime ?? 0)) < 1 {
+            if !forceReadAll, let knownMtime = known[path], abs(knownMtime - (mtime ?? 0)) < 1 {
                 continue // unchanged
             }
             let effectiveMtime = mtime ?? 0
@@ -55,6 +65,7 @@ final class LibraryStore {
         }
 
         await database.pruneMissing(existingPaths: existingPaths)
+        if forceReadAll { await database.setScannerVersion(kScannerVersion) }
         await loadFromDatabase()
     }
 
@@ -76,6 +87,101 @@ final class LibraryStore {
 
     func search(_ query: String) async -> [Track] {
         await database.search(query)
+    }
+
+    /// All tracks under an artist's top-level folder, ordered by album subfolder
+    /// then disc/track (used by the normal-mode playhead — "repeat artist").
+    func artistFolderTracks(for track: Track) async -> [Track] {
+        guard let folder = topFolder(for: track) else { return [] }
+        let tracks = await database.tracks(underRelativeTopFolder: folder)
+        return orderByFolder(tracks)
+    }
+
+    /// The first folder component of `track` under the app's Documents dir (its
+    /// artist folder). Derived from the "/Documents/" marker in the stored path,
+    /// so it doesn't depend on `/var` vs `/private/var` normalization.
+    func topFolder(for track: Track) -> String? {
+        let path = track.url.path
+        guard let r = path.range(of: "/Documents/") else { return nil }
+        let comps = path[r.upperBound...].split(separator: "/")
+        // Need folder/.../file — a file directly in Documents has no artist folder.
+        return comps.count >= 2 ? String(comps[0]) : nil
+    }
+
+    /// Order tracks by their album subfolder name, then disc/track/filename, so
+    /// the playhead walks albums in folder order and tracks in play order.
+    private func orderByFolder(_ tracks: [Track]) -> [Track] {
+        tracks.sorted { a, b in
+            let da = a.url.deletingLastPathComponent().path
+            let db = b.url.deletingLastPathComponent().path
+            if da != db { return da.localizedStandardCompare(db) == .orderedAscending }
+            let dna = a.discNo ?? 0, dnb = b.discNo ?? 0
+            if dna != dnb { return dna < dnb }
+            let tna = a.trackNo ?? Int.max, tnb = b.trackNo ?? Int.max
+            if tna != tnb { return tna < tnb }
+            return a.url.lastPathComponent.localizedStandardCompare(b.url.lastPathComponent) == .orderedAscending
+        }
+    }
+
+    // MARK: - Tag editing (writes tags into the actual files)
+
+    /// Write the edits into the track's file, then re-index it. Returns an error
+    /// message on failure, else nil.
+    @discardableResult
+    func applyTrackEdits(_ edits: TagEdits, to track: Track) async -> String? {
+        let url = track.url
+        do {
+            try await Task.detached(priority: .userInitiated) { try TagWriter.write(edits, to: url) }.value
+        } catch {
+            return "\(error)"
+        }
+        await reindex(path: url.path)
+        await loadFromDatabase()
+        return nil
+    }
+
+    /// Apply album-wide edits to every track's file. Returns an error message if
+    /// any track failed (others still applied).
+    @discardableResult
+    func applyAlbumEdits(_ edits: TagEdits, to album: Album) async -> String? {
+        let tracks = await database.tracks(inAlbum: album)
+        var firstError: String?
+        for track in tracks {
+            let url = track.url
+            do {
+                try await Task.detached(priority: .userInitiated) { try TagWriter.write(edits, to: url) }.value
+                await reindex(path: url.path)
+            } catch {
+                if firstError == nil { firstError = "\(error)" }
+            }
+        }
+        await loadFromDatabase()
+        return firstError
+    }
+
+    /// Re-read one file's metadata into the library (after its tags changed).
+    private func reindex(path: String) async {
+        let url = URL(fileURLWithPath: path)
+        let meta = await readMetadata(url: url)
+        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate?.timeIntervalSince1970) ?? 0
+        await database.upsertTrack(path: path, meta: meta, hasArtwork: meta.hasArtwork, mtime: mtime ?? 0)
+    }
+
+    // MARK: - History
+
+    func history(limit: Int = 1000) async -> [HistoryEntry] {
+        await database.history(limit: limit)
+    }
+
+    // MARK: - Folder browsing
+
+    /// Library tracks that live directly in `folder`, with full metadata. Matched
+    /// by the folder's path relative to the app's Documents dir.
+    func folderTracks(in folder: URL) async -> [Track] {
+        let path = folder.path
+        let rel = path.range(of: "/Documents/").map { String(path[$0.upperBound...]) } ?? ""
+        return await database.tracks(inRelativeFolder: rel)
     }
 
     /// Load embedded artwork for a track path, decoded off the main actor.

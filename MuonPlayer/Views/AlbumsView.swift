@@ -2,8 +2,17 @@ import SwiftUI
 
 struct AlbumsView: View {
     @Environment(LibraryStore.self) private var library
+    @State private var query = ""
 
     private let columns = [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)]
+
+    private var filtered: [Album] {
+        guard !query.isEmpty else { return library.albums }
+        return library.albums.filter {
+            $0.title.localizedCaseInsensitiveContains(query) ||
+            $0.artist.localizedCaseInsensitiveContains(query)
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -11,7 +20,7 @@ struct AlbumsView: View {
                 emptyState
             } else {
                 LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(library.albums) { album in
+                    ForEach(filtered) { album in
                         NavigationLink(value: album) {
                             AlbumCell(album: album)
                         }
@@ -21,6 +30,7 @@ struct AlbumsView: View {
                 .padding()
             }
         }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter albums")
         .navigationDestination(for: Album.self) { album in
             AlbumDetailView(album: album)
         }
@@ -68,11 +78,12 @@ private struct AlbumCell: View {
                 .shadow(radius: 2, y: 1)
             Text(album.title)
                 .font(.subheadline.weight(.medium))
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
             Text(album.artist)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 }

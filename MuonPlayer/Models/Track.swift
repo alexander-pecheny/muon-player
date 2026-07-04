@@ -42,9 +42,12 @@ struct Track: Identifiable, Sendable, Hashable {
     let artist: String?
     let album: String?
     let albumArtist: String?
+    let composer: String?
     let trackNo: Int?
     let discNo: Int?
     let duration: TimeInterval?
+    let bitrate: Int?      // bits per second
+    let codec: String?     // decoder codec name, e.g. "aac", "flac", "alac"
     let hasArtwork: Bool
     let format: AudioFormat
 
@@ -56,9 +59,12 @@ struct Track: Identifiable, Sendable, Hashable {
         artist: String? = nil,
         album: String? = nil,
         albumArtist: String? = nil,
+        composer: String? = nil,
         trackNo: Int? = nil,
         discNo: Int? = nil,
         duration: TimeInterval? = nil,
+        bitrate: Int? = nil,
+        codec: String? = nil,
         hasArtwork: Bool = false
     ) {
         self.id = id
@@ -68,9 +74,12 @@ struct Track: Identifiable, Sendable, Hashable {
         self.artist = artist
         self.album = album
         self.albumArtist = albumArtist
+        self.composer = composer
         self.trackNo = trackNo
         self.discNo = discNo
         self.duration = duration
+        self.bitrate = bitrate
+        self.codec = codec
         self.hasArtwork = hasArtwork
         self.format = AudioFormat(fileExtension: url.pathExtension)
     }
@@ -90,5 +99,39 @@ struct Track: Identifiable, Sendable, Hashable {
 
     static func displayName(from url: URL) -> String {
         url.deletingPathExtension().lastPathComponent
+    }
+
+    /// Human-readable codec/format label, e.g. "FLAC", "AAC", "ALAC", "MP3".
+    var formatLabel: String {
+        if let codec { return Track.codecLabel(codec) }
+        return url.pathExtension.uppercased()
+    }
+
+    /// Bitrate in kbps for display, if known.
+    var bitrateKbps: Int? {
+        guard let bitrate, bitrate > 0 else { return nil }
+        return Int((Double(bitrate) / 1000.0).rounded())
+    }
+
+    /// Combined "AAC · 256 kbps" style label.
+    var formatDescription: String {
+        if let kbps = bitrateKbps { return "\(formatLabel) · \(kbps) kbps" }
+        return formatLabel
+    }
+
+    private static func codecLabel(_ codec: String) -> String {
+        switch codec.lowercased() {
+        case "aac": return "AAC"
+        case "alac": return "ALAC"
+        case "flac": return "FLAC"
+        case "mp3", "mp3float": return "MP3"
+        case "opus": return "Opus"
+        case "vorbis": return "Vorbis"
+        case "wmav1", "wmav2": return "WMA"
+        case "ac3": return "AC-3"
+        case "eac3": return "E-AC-3"
+        case "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_s16be", "pcm_f32be": return "PCM"
+        default: return codec.uppercased()
+        }
     }
 }

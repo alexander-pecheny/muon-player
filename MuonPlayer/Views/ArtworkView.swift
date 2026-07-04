@@ -24,17 +24,24 @@ struct ArtworkView: View {
     @State private var image: PlatformImage?
 
     var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                placeholder
+        // The clear Rectangle takes whatever size the parent proposes (it does
+        // not propagate the image's own aspect ratio), so a caller's
+        // `.aspectRatio(1, .fit)` yields a true square and the filled artwork is
+        // center-cropped to it — no letterboxing for non-square covers.
+        Rectangle()
+            .fill(Color.clear)
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    placeholder
+                }
             }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        .task(id: path) { await load() }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .contentShape(Rectangle())
+            .task(id: path) { await load() }
     }
 
     private var placeholder: some View {

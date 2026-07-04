@@ -9,9 +9,13 @@ struct TrackMetadata {
     var artist: String?
     var album: String?
     var albumArtist: String?
+    var composer: String?
+    var year: Int?
     var trackNo: Int?
     var discNo: Int?
     var duration: TimeInterval?
+    var bitrate: Int?      // bits per second
+    var codec: String?     // e.g. "aac", "flac", "alac", "mp3"
     var hasArtwork: Bool = false
     var artwork: Data?
 }
@@ -37,7 +41,22 @@ enum FFmpegMetadata {
         let nb = Int(ctx.pointee.nb_streams)
         for i in 0..<nb {
             guard let stream = ctx.pointee.streams[i] else { continue }
+            let params = stream.pointee.codecpar
+            let isAudio = params?.pointee.codec_type == AVMEDIA_TYPE_AUDIO
+
+            // Audio stream carries codec + bitrate. Tags on the audio stream can
+            // override; tags on a cover-art (video) stream must not.
             readTags(into: &meta, from: stream.pointee.metadata, overwrite: false)
+
+            if isAudio, let params {
+                if let name = avcodec_get_name(params.pointee.codec_id) {
+                    meta.codec = String(cString: name)
+                }
+                let streamBitrate = params.pointee.bit_rate
+                if streamBitrate > 0 {
+                    meta.bitrate = Int(streamBitrate)
+                }
+            }
 
             if (stream.pointee.disposition & attachedPicDisposition) != 0 {
                 meta.hasArtwork = true
@@ -47,6 +66,18 @@ enum FFmpegMetadata {
                         meta.artwork = Data(bytes: data, count: Int(pic.size))
                     }
                 }
+            }
+        }
+
+        // Fall back to container bitrate, then to size/duration (lossless codecs
+        // often report 0 per-stream).
+        if meta.bitrate == nil || meta.bitrate == 0 {
+            if ctx.pointee.bit_rate > 0 {
+                meta.bitrate = Int(ctx.pointee.bit_rate)
+            } else if let dur = meta.duration, dur > 0,
+                      let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                      let size = attrs[.size] as? Int64, size > 0 {
+                meta.bitrate = Int(Double(size) * 8.0 / dur)
             }
         }
 
@@ -63,28 +94,46 @@ enum FFmpegMetadata {
     private static func readTags(into meta: inout TrackMetadata,
                                  from dict: OpaquePointer?,
                                  overwrite: Bool = true) {
-        func value(_ key: String) -> String? {
-            guard let entry = av_dict_get(dict, key, nil, AV_DICT_IGNORE_SUFFIX),
-                  let v = entry.pointee.value else { return nil }
-            let s = String(cString: v).trimmingCharacters(in: .whitespacesAndNewlines)
-            return s.isEmpty ? nil : s
+        // Exact (case-insensitive) match — NOT AV_DICT_IGNORE_SUFFIX. The suffix
+        // flag matches any key *starting with* the search key, so looking up
+        // "album" would return "album_artist" when that atom is ordered first,
+        // gluing every one of an artist's albums into a single self-titled blob.
+        func value(_ keys: String...) -> String? {
+            for key in keys {
+                guard let entry = av_dict_get(dict, key, nil, 0),
+                      let v = entry.pointee.value else { continue }
+                let s = String(cString: v).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !s.isEmpty { return s }
+            }
+            return nil
         }
-        func set(_ current: inout String?, _ key: String) {
-            if let v = value(key), overwrite || current == nil { current = v }
+        func set(_ current: inout String?, _ keys: String...) {
+            for key in keys {
+                if let v = value(key), overwrite || current == nil { current = v; return }
+            }
         }
         set(&meta.title, "title")
         set(&meta.artist, "artist")
         set(&meta.album, "album")
-        if let v = value("album_artist"), overwrite || meta.albumArtist == nil { meta.albumArtist = v }
-        else if let v = value("albumartist"), overwrite || meta.albumArtist == nil { meta.albumArtist = v }
-        if let t = value("track"), let n = leadingInt(t), overwrite || meta.trackNo == nil { meta.trackNo = n }
-        if let d = value("disc"), let n = leadingInt(d), overwrite || meta.discNo == nil { meta.discNo = n }
-        else if let d = value("discnumber"), let n = leadingInt(d), overwrite || meta.discNo == nil { meta.discNo = n }
+        set(&meta.albumArtist, "album_artist", "albumartist", "album artist")
+        set(&meta.composer, "composer")
+        if let t = value("track", "tracknumber"), let n = leadingInt(t), overwrite || meta.trackNo == nil { meta.trackNo = n }
+        if let d = value("disc", "discnumber", "disk"), let n = leadingInt(d), overwrite || meta.discNo == nil { meta.discNo = n }
+        if let d = value("date", "year", "originaldate", "originalyear", "date_recorded"),
+           let y = parseYear(d), overwrite || meta.year == nil { meta.year = y }
     }
 
     private static func leadingInt(_ s: String) -> Int? {
         let head = s.prefix { $0.isNumber }
         return Int(head)
+    }
+
+    /// Pull a 4-digit year out of a date string like "2021", "2021-03-15".
+    private static func parseYear(_ s: String) -> Int? {
+        for group in s.split(whereSeparator: { !$0.isNumber }) where group.count >= 4 {
+            if let y = Int(group.prefix(4)), y > 1000, y < 3000 { return y }
+        }
+        return nil
     }
 
     /// Vorbis comment cover art: METADATA_BLOCK_PICTURE is a base64-encoded FLAC

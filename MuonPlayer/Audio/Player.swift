@@ -19,13 +19,31 @@ final class Player {
     private(set) var duration: TimeInterval = 0
     private(set) var upNext: [QueueCore.QueuedItem] = []
     private(set) var reachedEnd: Bool = false
+    /// What plays next: the head of the explicit queue, else the playhead's next.
+    private(set) var nextUpTrack: Track?
+
+    /// Playback order mode (normal = repeat-artist playhead, shuffle, repeat…).
+    var mode: PlaybackMode = .normal {
+        didSet { guard mode != oldValue else { return }; Task { await applyMode() } }
+    }
 
     /// Fired when a track begins playing (for "now playing" scrobble update).
     var onTrackStarted: ((Track) -> Void)?
     /// Fired when a track stops being the current track, with how long it played.
     var onTrackFinished: ((Track, TimeInterval) -> Void)?
 
+    /// Set by the app so the playhead can fetch an artist's folder tracks.
+    weak var library: LibraryStore?
+
     let queue = QueueCore()
+
+    // The album the user started from (used for repeat-album and as a fallback
+    // when a track isn't inside an artist folder).
+    private var albumContext: [Track] = []
+    // The artist folder the current timeline was built for (nil once built for a
+    // track that has no artist folder). `timelineBuilt` disambiguates unset.
+    private var timelineFolder: String?
+    private var timelineBuilt = false
 
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
@@ -37,6 +55,11 @@ final class Player {
     private var pendingFrames: Int = 0
     private var generation: Int = 0          // bumped on every discontinuity
     private var noMoreAudio = false
+    // Ramp the first few ms after a user-initiated start/seek up from silence, so
+    // any engine/decoder startup transient (the occasional "white noise" blip)
+    // is inaudible. Never set on gapless album transitions, so those stay seamless.
+    private var fadeInRemaining: Int = 0
+    private static let fadeInFrames = Int(CanonicalAudio.sampleRate * 0.010) // 10ms
 
     private let segments = SegmentTable()
     private let targetBufferedFrames = Int(CanonicalAudio.sampleRate * 3) // ~3s ahead
@@ -60,10 +83,64 @@ final class Player {
 
     /// Play `track` within `context` (its album/playlist). Does not clear the queue.
     func play(track: Track, context: [Track]) {
+        albumContext = context
+        // Start immediately on the album context so playback (and gapless) works
+        // without waiting on the async artist-folder fetch.
         let index = context.firstIndex(of: track) ?? 0
         _ = queue.setContext(context, startIndex: index)
+        applyLoopFlags()
+        timelineBuilt = false
         beginPlayback(track, offset: 0)
         refreshUpNext()
+        // Upgrade the timeline to the full mode order (artist folder / shuffle).
+        Task { await rebuildTimeline(anchor: track) }
+    }
+
+    // MARK: - Playback mode / playhead
+
+    private func applyLoopFlags() {
+        queue.repeatOne = (mode == .repeatTrack)
+        queue.loops = (mode != .repeatTrack)
+    }
+
+    /// Rebuild the automatic play order around `anchor` for the current mode,
+    /// without interrupting what's currently playing.
+    private func rebuildTimeline(anchor: Track) async {
+        let folder = library?.topFolder(for: anchor)
+        var timeline: [Track]
+        switch mode {
+        case .repeatTrack, .repeatAlbum:
+            timeline = albumContext.isEmpty ? [anchor] : albumContext
+        case .normal:
+            let artist = await library?.artistFolderTracks(for: anchor) ?? []
+            timeline = artist.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : artist
+        case .shuffle:
+            let artist = await library?.artistFolderTracks(for: anchor) ?? []
+            let base = artist.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : artist
+            timeline = shuffled(base, anchor: anchor)
+        }
+        let idx = timeline.firstIndex(of: anchor) ?? 0
+        _ = queue.setContext(timeline, startIndex: idx)
+        applyLoopFlags()
+        timelineFolder = folder
+        timelineBuilt = true
+        refreshUpNext()
+    }
+
+    private func shuffled(_ tracks: [Track], anchor: Track) -> [Track] {
+        var s = tracks.shuffled()
+        if let i = s.firstIndex(of: anchor) {
+            s.remove(at: i)
+            s.insert(anchor, at: 0)
+        }
+        return s
+    }
+
+    private func applyMode() async {
+        applyLoopFlags()
+        if let current = currentTrack {
+            await rebuildTimeline(anchor: current)
+        }
     }
 
     func togglePlayPause() {
@@ -130,7 +207,10 @@ final class Player {
 
     func removeFromQueue(id: UUID) { queue.removeQueued(id: id); refreshUpNext() }
     func clearQueue() { queue.clearQueue(); refreshUpNext() }
-    private func refreshUpNext() { upNext = queue.queuedItems() }
+    private func refreshUpNext() {
+        upNext = queue.queuedItems()
+        nextUpTrack = queue.peekNext()
+    }
 
     // MARK: - Playback core
 
@@ -158,6 +238,7 @@ final class Player {
             self.cumulativeScheduledFrames = 0
             self.pendingFrames = 0
             self.noMoreAudio = false
+            self.fadeInRemaining = Player.fadeInFrames
             self.openDecoder(for: track, offset: offset, generation: gen)
             self.feedIfNeeded(generation: gen)
         }
@@ -225,6 +306,7 @@ final class Player {
                 DispatchQueue.main.async { [weak self] in self?.markPossibleEnd() }
                 return
             }
+            if fadeInRemaining > 0 { applyFadeIn(to: buffer) }
             let frames = Int(buffer.frameLength)
             pendingFrames += frames
             cumulativeScheduledFrames += AVAudioFramePosition(frames)
@@ -236,6 +318,22 @@ final class Player {
                     self.feedIfNeeded(generation: gen)
                 }
             }
+        }
+    }
+
+    /// Linearly ramp gain 0→1 across the first `fadeInFrames` of output following
+    /// a start/seek. Consumes `fadeInRemaining` as it goes.
+    private func applyFadeIn(to buffer: AVAudioPCMBuffer) {
+        guard let planes = buffer.floatChannelData else { return }
+        let channels = Int(buffer.format.channelCount)
+        let n = Int(buffer.frameLength)
+        let total = Player.fadeInFrames
+        for i in 0..<n {
+            guard fadeInRemaining > 0 else { break }
+            let done = total - fadeInRemaining
+            let gain = Float(done) / Float(total)
+            for ch in 0..<channels { planes[ch][i] *= gain }
+            fadeInRemaining -= 1
         }
     }
 
@@ -277,6 +375,16 @@ final class Player {
             duration = seg.duration
             onTrackStarted?(seg.track)
             loadArtwork(for: seg.track)
+
+            // Crossed into a different artist folder (e.g. a queued cross-artist
+            // track played) — re-anchor the timeline so normal mode keeps
+            // repeating the *new* artist.
+            let folder = library?.topFolder(for: seg.track)
+            if !timelineBuilt || folder != timelineFolder {
+                let anchor = seg.track
+                Task { await rebuildTimeline(anchor: anchor) }
+            }
+            refreshUpNext()
         }
 
         currentTime = seg.startOffset + Double(frame - seg.startFrame) / CanonicalAudio.sampleRate

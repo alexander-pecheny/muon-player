@@ -112,23 +112,35 @@ final class ScrobbleService {
         Task { try? await client.updateNowPlaying(s) }
     }
 
-    /// Called when a track stops being current. Applies Last.fm's eligibility
-    /// rule and, if met, records the scrobble to SQLite (always — even offline).
+    /// Called when a track stops being current. Records it to the local play
+    /// history (always) and, if it meets Last.fm's eligibility rule and the user
+    /// is signed in, also queues a scrobble to SQLite (even offline).
     func trackFinished(_ track: Track, played: TimeInterval) {
-        guard isLoggedIn, let duration = track.duration, duration > 30 else { return }
-        let threshold = min(duration / 2, 240)
-        guard played >= threshold else { return }
+        // Ignore accidental blips / rapid skips.
+        guard played >= 4 else { return }
 
         let startedAt = Int(Date().timeIntervalSince1970 - played)
         let artist = track.displayArtist
         let album = track.album
         let title = track.title
-        let dur = Int(duration)
+        let path = track.url.path
+
+        let duration = track.duration ?? 0
+        let meetsRule = duration > 30 && played >= min(duration / 2, 240)
+        let willScrobble = meetsRule && isLoggedIn
+
         Task {
-            await database.insertScrobble(artist: artist, album: album, title: title,
-                                          timestamp: startedAt, duration: dur)
-            await refreshPendingCount()
-            flush()
+            if willScrobble {
+                await database.insertScrobble(artist: artist, album: album, title: title,
+                                              timestamp: startedAt, duration: Int(duration))
+            }
+            await database.insertHistory(path: path, artist: artist, album: album, title: title,
+                                         playedAt: startedAt,
+                                         state: willScrobble ? .pending : .ineligible)
+            if willScrobble {
+                await refreshPendingCount()
+                flush()
+            }
         }
     }
 
@@ -156,6 +168,7 @@ final class ScrobbleService {
                 do {
                     try await client.scrobble(s)
                     await database.markScrobbled(id: row.id)
+                    await database.markHistoryScrobbled(artist: row.artist, title: row.title, playedAt: row.timestamp)
                 } catch LastFMClient.LastFMError.transient {
                     return // offline / rate-limited — try again later, keep pending
                 } catch {
