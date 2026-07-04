@@ -42,25 +42,58 @@ struct ContentView: View {
     private var tabs: some View {
         TabView(selection: $selection) {
             ForEach(tabSettings.order) { tab in
-                tabContent(tab)
+                TabNavStack(tab: tab)
                     .tabItem { Label(tab.title, systemImage: tab.systemImage) }
                     .tag(tab)
             }
         }
     }
+}
 
-    @ViewBuilder private func tabContent(_ tab: AppTab) -> some View {
-        NavigationStack {
-            switch tab {
-            case .albums: AlbumsView().navigationTitle("Albums")
-            case .artists: ArtistsView().navigationTitle("Artists")
-            case .songs: SongsView().navigationTitle("Songs")
-            case .folders: FoldersView().navigationTitle("Folders")
-            case .search: SearchView().navigationTitle("Search")
-            case .history: HistoryView().navigationTitle("History")
-            case .settings: SettingsView().navigationTitle("Settings")
-            }
+/// One tab's navigation container. All value-based destinations (`Album`,
+/// `ArtistRef`, `FolderRef`) are declared exactly once here, at the stack root —
+/// never on a pushed view. Registering a `navigationDestination` on a view *as
+/// it is being pushed* (as the old per-view registrations did) made SwiftUI
+/// re-resolve the stack mid-transition, which showed up as the first tap into an
+/// album bouncing back / animating the wrong way. Centralising them fixes that
+/// and also collapses the folder browser's per-level duplicate registration.
+private struct TabNavStack: View {
+    let tab: AppTab
+    @State private var path = NavigationPath()
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            root
+                .navigationDestination(for: Album.self) { AlbumDetailView(album: $0) }
+                .navigationDestination(for: ArtistRef.self) { ArtistView(artist: $0.name) }
+                .navigationDestination(for: FolderRef.self) { FoldersView(directory: $0.url) }
         }
+        .environment(\.navPath, $path)
+    }
+
+    @ViewBuilder private var root: some View {
+        switch tab {
+        case .albums: AlbumsView().navigationTitle("Albums")
+        case .artists: ArtistsView().navigationTitle("Artists")
+        case .songs: SongsView().navigationTitle("Songs")
+        case .folders: FoldersView().navigationTitle("Folders")
+        case .search: SearchView().navigationTitle("Search")
+        case .history: HistoryView().navigationTitle("History")
+        case .settings: SettingsView().navigationTitle("Settings")
+        }
+    }
+}
+
+/// Lets a deeply-pushed view (e.g. AlbumDetailView's "Go to Artist") push onto
+/// its enclosing tab stack without registering its own `navigationDestination`.
+private struct NavPathKey: EnvironmentKey {
+    static let defaultValue: Binding<NavigationPath>? = nil
+}
+
+extension EnvironmentValues {
+    var navPath: Binding<NavigationPath>? {
+        get { self[NavPathKey.self] }
+        set { self[NavPathKey.self] = newValue }
     }
 }
 

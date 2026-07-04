@@ -49,7 +49,5 @@ struct ArtistsView: View {
                 ContentUnavailableView("No Artists", systemImage: "music.mic")
             }
         }
-        .navigationDestination(for: ArtistRef.self) { ref in ArtistView(artist: ref.name) }
-        .navigationDestination(for: Album.self) { album in AlbumDetailView(album: album) }
     }
 }

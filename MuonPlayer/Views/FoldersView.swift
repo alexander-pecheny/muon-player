@@ -66,7 +66,6 @@ struct FoldersView: View {
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter this folder")
         .navigationTitle(directory == nil ? "Folders" : dir.lastPathComponent)
         .navigationBarTitleDisplayMode(directory == nil ? .large : .inline)
-        .navigationDestination(for: FolderRef.self) { ref in FoldersView(directory: ref.url) }
         .overlay {
             if loaded, subfolders.isEmpty, trackFiles.isEmpty {
                 ContentUnavailableView("Empty Folder", systemImage: "folder")

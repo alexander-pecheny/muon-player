@@ -46,6 +46,15 @@ struct MuonPlayerApp: App {
                     if GaplessSelfTest.isEnabled {
                         await GaplessSelfTest.run(player: player, library: library)
                     }
+                    if SwitchNoiseSelfTest.isEnabled {
+                        await SwitchNoiseSelfTest.run(player: player, library: library)
+                    }
+                    if SkipScrobbleSelfTest.isEnabled {
+                        await SkipScrobbleSelfTest.run(player: player, library: library)
+                    }
+                    if PlayheadSelfTest.isEnabled {
+                        await PlayheadSelfTest.run(player: player, library: library)
+                    }
                     if ScrobbleSelfTest.isEnabled {
                         await ScrobbleSelfTest.run(scrobbler: scrobbler, database: library.database)
                     }

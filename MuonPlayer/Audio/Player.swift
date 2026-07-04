@@ -59,7 +59,7 @@ final class Player {
     // any engine/decoder startup transient (the occasional "white noise" blip)
     // is inaudible. Never set on gapless album transitions, so those stay seamless.
     private var fadeInRemaining: Int = 0
-    private static let fadeInFrames = Int(CanonicalAudio.sampleRate * 0.010) // 10ms
+    private static let fadeInFrames = Int(CanonicalAudio.sampleRate * 0.012) // 12ms
 
     private let segments = SegmentTable()
     private let targetBufferedFrames = Int(CanonicalAudio.sampleRate * 3) // ~3s ahead
@@ -86,7 +86,7 @@ final class Player {
         albumContext = context
         // Start immediately on the album context so playback (and gapless) works
         // without waiting on the async artist-folder fetch.
-        let index = context.firstIndex(of: track) ?? 0
+        let index = context.firstIndex(where: { $0.url == track.url }) ?? 0
         _ = queue.setContext(context, startIndex: index)
         applyLoopFlags()
         timelineBuilt = false
@@ -119,7 +119,12 @@ final class Player {
             let base = artist.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : artist
             timeline = shuffled(base, anchor: anchor)
         }
-        let idx = timeline.firstIndex(of: anchor) ?? 0
+        // Match by url, not value equality: the timeline is a fresh DB fetch, so
+        // its Track instances carry different (random) ids than `anchor` and
+        // `firstIndex(of:)` would never match — the playhead would snap to index 0
+        // and queue up the artist folder's second track instead of the anchor's
+        // real successor.
+        let idx = timeline.firstIndex(where: { $0.url == anchor.url }) ?? 0
         _ = queue.setContext(timeline, startIndex: idx)
         applyLoopFlags()
         timelineFolder = folder
@@ -129,7 +134,7 @@ final class Player {
 
     private func shuffled(_ tracks: [Track], anchor: Track) -> [Track] {
         var s = tracks.shuffled()
-        if let i = s.firstIndex(of: anchor) {
+        if let i = s.firstIndex(where: { $0.url == anchor.url }) {
             s.remove(at: i)
             s.insert(anchor, at: 0)
         }
@@ -200,7 +205,7 @@ final class Player {
     // MARK: - Queue editing (UI)
 
     func enqueue(_ track: Track, context: [Track]) {
-        let index = context.firstIndex(of: track) ?? 0
+        let index = context.firstIndex(where: { $0.url == track.url }) ?? 0
         queue.enqueue(track, context: context, index: index)
         refreshUpNext()
     }
@@ -216,24 +221,36 @@ final class Player {
 
     /// Reset everything and start feeding from `track` at `offset` seconds.
     private func beginPlayback(_ track: Track, offset: TimeInterval) {
+        // A user action (Next / Previous / picking another track) is abandoning
+        // the current track. Report how much of it played *before* we tear the
+        // node down, so an eligible partial listen still scrobbles — the gapless
+        // and end-of-queue paths only cover tracks that finish on their own. A
+        // seek or replay of the same track is ignored (see reportOutgoingFinished).
+        reportOutgoingFinished(replacedBy: track.id)
+
         reachedEnd = false
         currentTrack = track
         duration = track.duration ?? 0
         currentTime = offset
         lastReportedTrackID = nil
 
-        node.stop()
-        segments.reset()
-
+        // Bump the generation *before* stopping the node. The feeder checks the
+        // generation on every scheduling iteration (see feedIfNeeded), so any
+        // in-flight feed for the outgoing track stops at once instead of dumping
+        // its remaining buffers onto the restarted node — that stray, full-volume
+        // chunk was the "blip" heard at every manual track switch.
         let gen = generation &+ 1
         generation = gen
+
+        node.stop()
+        segments.reset()
 
         do {
             if !engine.isRunning { try engine.start() }
         } catch { print("engine start failed: \(error)") }
 
         feedQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self, gen == self.generation else { return }
             self.currentDecoder = nil
             self.cumulativeScheduledFrames = 0
             self.pendingFrames = 0
@@ -241,9 +258,16 @@ final class Player {
             self.fadeInRemaining = Player.fadeInFrames
             self.openDecoder(for: track, offset: offset, generation: gen)
             self.feedIfNeeded(generation: gen)
+            // Start the node only after its first buffers are queued, so it never
+            // renders an empty queue (which underran into a silence gap at the
+            // switch point). The incoming track's fade-in then covers the start.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, gen == self.generation else { return }
+                if !self.engine.isRunning { try? self.engine.start() }
+                self.node.play()
+            }
         }
 
-        node.play()
         isPlaying = true
         startTicker()
         onTrackStarted?(track)
@@ -252,6 +276,9 @@ final class Player {
     }
 
     private func endPlayback() {
+        // Reaching the end of the queue by pressing Next past the last track (or
+        // Stop) still abandons the outgoing track — report it before stopping.
+        reportOutgoingFinished(replacedBy: nil)
         generation &+= 1
         node.stop()
         isPlaying = false
@@ -299,8 +326,12 @@ final class Player {
     }
 
     private func feedIfNeeded(generation gen: Int) {
-        guard gen == generation else { return }
         while pendingFrames < targetBufferedFrames {
+            // Re-check on every iteration: a track switch (which bumps the
+            // generation) must stop this feed immediately, or its remaining
+            // buffers would be scheduled onto the node that now belongs to the
+            // new track.
+            guard gen == generation else { return }
             guard let buffer = nextChunk(generation: gen) else {
                 noMoreAudio = true
                 DispatchQueue.main.async { [weak self] in self?.markPossibleEnd() }
@@ -354,6 +385,21 @@ final class Player {
         return playerTime.sampleTime
     }
 
+    /// Emit `onTrackFinished` for the track currently being counted, using its
+    /// real elapsed play time, and stop counting it. Called on any manual
+    /// teardown (skip / stop). `replacedBy` is the track taking over, or nil if
+    /// none; a seek or replay of the *same* track passes its own id and is
+    /// ignored so a single listen is never scrobbled twice. Must run before the
+    /// node is stopped, while `currentSampleTime` still reflects the outgoing
+    /// track's position.
+    private func reportOutgoingFinished(replacedBy newTrackID: UUID?) {
+        guard let prevID = lastReportedTrackID, prevID != newTrackID,
+              let prev = segments.segment(withID: prevID) else { return }
+        let played = max(0, Double(currentSampleTime - reportedTrackStartFrame) / CanonicalAudio.sampleRate)
+        lastReportedTrackID = nil
+        onTrackFinished?(prev.track, played)
+    }
+
     private func tick() {
         guard isPlaying else { return }
         let frame = currentSampleTime
@@ -402,6 +448,9 @@ final class Player {
             let played = current.duration ?? currentTime
             onTrackFinished?(current, played)
         }
+        // Stop counting this track so a following stop()/endPlayback() can't
+        // report the same natural finish a second time.
+        lastReportedTrackID = nil
         isPlaying = false
         reachedEnd = true
         stopTicker()

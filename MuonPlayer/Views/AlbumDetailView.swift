@@ -7,7 +7,7 @@ struct AlbumDetailView: View {
     @State private var tracks: [Track] = []
     @State private var editingAlbum = false
     @State private var editingTrack: Track?
-    @State private var goToArtist: ArtistRef?
+    @Environment(\.navPath) private var navPath
 
     var body: some View {
         List {
@@ -33,14 +33,18 @@ struct AlbumDetailView: View {
                         Button {
                             if let first = tracks.first { player.play(track: first, context: tracks) }
                         } label: {
-                            Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+                            Label("Play", systemImage: "play.fill")
+                                .labelStyle(.titleAndIcon)
+                                .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
 
                         Button {
                             for t in tracks { player.enqueue(t, context: tracks) }
                         } label: {
-                            Label("Queue", systemImage: "text.append").frame(maxWidth: .infinity)
+                            Label("Queue", systemImage: "text.append")
+                                .labelStyle(.titleAndIcon)
+                                .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
                     }
@@ -79,14 +83,13 @@ struct AlbumDetailView: View {
         }
         .sheet(isPresented: $editingAlbum) { TagEditView(scope: .album(album)) }
         .sheet(item: $editingTrack) { t in TagEditView(scope: .track(t)) }
-        .navigationDestination(item: $goToArtist) { ref in ArtistView(artist: ref.name) }
         .task(id: library.trackCount) { tracks = await library.tracks(in: album) }
     }
 
     // MARK: Menus
 
     @ViewBuilder private var albumMenu: some View {
-        Button { goToArtist = ArtistRef(name: album.artist) } label: {
+        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
         Button { for t in tracks { player.enqueue(t, context: tracks) } } label: {
@@ -98,7 +101,7 @@ struct AlbumDetailView: View {
     }
 
     @ViewBuilder private func trackMenu(_ track: Track) -> some View {
-        Button { goToArtist = ArtistRef(name: album.artist) } label: {
+        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
         Button { player.enqueue(track, context: tracks) } label: {

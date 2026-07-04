@@ -31,9 +31,6 @@ struct AlbumsView: View {
             }
         }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter albums")
-        .navigationDestination(for: Album.self) { album in
-            AlbumDetailView(album: album)
-        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if library.isScanning {
