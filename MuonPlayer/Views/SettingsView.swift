@@ -74,6 +74,14 @@ struct SettingsView: View {
                     Label("Tab Order", systemImage: "square.grid.2x2")
                 }
             }
+
+            Section("About") {
+                NavigationLink {
+                    AboutView()
+                } label: {
+                    Label("About & Licenses", systemImage: "info.circle")
+                }
+            }
         }
     }
 }
