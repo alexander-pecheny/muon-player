@@ -5,7 +5,9 @@ import Observation
 /// Tab Order); iOS shows the first few at the bottom and folds the rest into
 /// the automatic "More" tab.
 enum AppTab: String, CaseIterable, Identifiable, Sendable {
-    case albums, artists, songs, folders, search, history, settings
+    case albums, artists, songs, folders
+    case home = "search"   // formerly "Search"; rawValue kept so saved tab orders migrate
+    case history, settings
     var id: String { rawValue }
 
     var title: String {
@@ -14,7 +16,7 @@ enum AppTab: String, CaseIterable, Identifiable, Sendable {
         case .artists: return "Artists"
         case .songs: return "Songs"
         case .folders: return "Folders"
-        case .search: return "Search"
+        case .home: return "Home"
         case .history: return "History"
         case .settings: return "Settings"
         }
@@ -26,7 +28,7 @@ enum AppTab: String, CaseIterable, Identifiable, Sendable {
         case .artists: return "music.mic"
         case .songs: return "music.note.list"
         case .folders: return "folder"
-        case .search: return "magnifyingglass"
+        case .home: return "house"
         case .history: return "clock"
         case .settings: return "gearshape"
         }

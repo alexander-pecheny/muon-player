@@ -26,7 +26,9 @@ enum PlayheadSelfTest {
         }
         let expectedNext = drifter[1]
 
-        player.mode = .normal
+        // Repeat-Top-Folder builds its timeline from a fresh artist-folder fetch,
+        // which is where the anchor-by-value-equality regression lived.
+        player.mode = .repeatTopFolder
         // Context is a *separate* fetch (as the album view would pass) — different
         // Track instances than artistFolderTracks returns.
         player.play(track: anchor, context: drifter)

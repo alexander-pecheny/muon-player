@@ -25,6 +25,8 @@ struct HistoryEntry: Identifiable, Sendable {
     let title: String
     let playedAt: Int          // unix seconds
     let scrobbleState: ScrobbleState
+    let duration: Int?         // track length, seconds
+    let listened: Int?         // seconds actually played
 }
 
 /// Fields a user can override via tag editing (stored in the DB, layered over
@@ -36,6 +38,7 @@ struct TagEdits: Sendable {
     var albumArtist: String?
     var trackNo: Int?
     var composer: String?
+    var year: Int?
 }
 
 /// The current metadata-reading logic version. Bump to force a full re-read of
@@ -163,6 +166,9 @@ actor Database {
         );
         """)
         exec("CREATE INDEX IF NOT EXISTS idx_history_played ON history(played_at DESC);")
+        // Track length + how many seconds were actually played (added later).
+        addColumn("history", "duration", "INTEGER")
+        addColumn("history", "listened", "INTEGER")
     }
 
     /// Add a column if the table doesn't already have it (poor-man's migration).
@@ -308,6 +314,37 @@ actor Database {
         return albums
     }
 
+    /// Albums most recently added to the library (newest track wins), for the
+    /// Home tab's "Recently Added" shelf.
+    func recentAlbums(limit: Int) -> [Album] {
+        let sql = """
+        SELECT \(effAlbumArtistGroup) AS aa,
+               \(effAlbumGroup) AS al,
+               COUNT(*) AS cnt,
+               MAX(year),
+               MAX(CASE WHEN has_artwork=1 THEN path END),
+               MAX(date_added) AS added
+        FROM tracks
+        GROUP BY aa, al
+        ORDER BY added DESC
+        LIMIT ?;
+        """
+        guard let stmt = prepare(sql) else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var albums: [Album] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            albums.append(Album(
+                title: String(cString: sqlite3_column_text(stmt, 1)),
+                artist: String(cString: sqlite3_column_text(stmt, 0)),
+                trackCount: Int(sqlite3_column_int64(stmt, 2)),
+                year: sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 3)),
+                artworkPath: sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 4))
+            ))
+        }
+        return albums
+    }
+
     func tracks(inAlbum album: Album) -> [Track] {
         let sql = """
         SELECT \(trackColumns) FROM tracks
@@ -341,6 +378,20 @@ actor Database {
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, "%/Documents/" + escapeLike(folder + "/") + "%")
+        return readTracks(stmt)
+    }
+
+    /// All tracks whose effective album-artist equals `artist` (used by the
+    /// "Repeat Artist" playhead — tag-based, so it spans folders).
+    func tracks(byAlbumArtist artist: String) -> [Track] {
+        let sql = """
+        SELECT \(trackColumns) FROM tracks
+        WHERE \(effAlbumArtistGroup) = ?
+        ORDER BY path COLLATE NOCASE;
+        """
+        guard let stmt = prepare(sql) else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, artist)
         return readTracks(stmt)
     }
 
@@ -399,7 +450,7 @@ actor Database {
     // Fully qualified / effective columns so the FTS JOIN in search() doesn't
     // hit ambiguous columns and so user overrides are applied on read.
     private var trackColumns: String {
-        "tracks.id, tracks.path, \(effTitle), \(effArtist), \(effAlbum), \(effAlbumArtist), \(effComposer), \(effTrackNo), tracks.disc_no, tracks.duration, tracks.bitrate, tracks.codec, tracks.has_artwork"
+        "tracks.id, tracks.path, \(effTitle), \(effArtist), \(effAlbum), \(effAlbumArtist), \(effComposer), \(effTrackNo), tracks.disc_no, tracks.duration, tracks.bitrate, tracks.codec, tracks.has_artwork, tracks.year"
     }
 
     private func readTracks(_ stmt: OpaquePointer) -> [Track] {
@@ -417,6 +468,7 @@ actor Database {
                 composer: columnText(stmt, 6),
                 trackNo: columnInt(stmt, 7),
                 discNo: columnInt(stmt, 8),
+                year: columnInt(stmt, 13),
                 duration: sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 9),
                 bitrate: columnInt(stmt, 10),
                 codec: columnText(stmt, 11),
@@ -525,8 +577,9 @@ actor Database {
     // MARK: - Play history
 
     func insertHistory(path: String?, artist: String, album: String?, title: String,
-                       playedAt: Int, state: HistoryEntry.ScrobbleState) {
-        guard let stmt = prepare("INSERT INTO history (path, artist, album, title, played_at, scrobble_state) VALUES (?,?,?,?,?,?)") else { return }
+                       playedAt: Int, state: HistoryEntry.ScrobbleState,
+                       duration: Int?, listened: Int?) {
+        guard let stmt = prepare("INSERT INTO history (path, artist, album, title, played_at, scrobble_state, duration, listened) VALUES (?,?,?,?,?,?,?,?)") else { return }
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, path)
         bindText(stmt, 2, artist)
@@ -534,6 +587,8 @@ actor Database {
         bindText(stmt, 4, title)
         sqlite3_bind_int64(stmt, 5, Int64(playedAt))
         bindText(stmt, 6, state.rawValue)
+        bindInt(stmt, 7, duration)
+        bindInt(stmt, 8, listened)
         sqlite3_step(stmt)
     }
 
@@ -554,7 +609,7 @@ actor Database {
     }
 
     func history(limit: Int = 1000) -> [HistoryEntry] {
-        let sql = "SELECT id, artist, album, title, played_at, scrobble_state FROM history ORDER BY played_at DESC, id DESC LIMIT ?;"
+        let sql = "SELECT id, artist, album, title, played_at, scrobble_state, duration, listened FROM history ORDER BY played_at DESC, id DESC LIMIT ?;"
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
@@ -566,7 +621,9 @@ actor Database {
                 album: columnText(stmt, 2),
                 title: String(cString: sqlite3_column_text(stmt, 3)),
                 playedAt: Int(sqlite3_column_int64(stmt, 4)),
-                scrobbleState: HistoryEntry.ScrobbleState(rawValue: columnText(stmt, 5) ?? "ineligible") ?? .ineligible
+                scrobbleState: HistoryEntry.ScrobbleState(rawValue: columnText(stmt, 5) ?? "ineligible") ?? .ineligible,
+                duration: columnInt(stmt, 6),
+                listened: columnInt(stmt, 7)
             ))
         }
         return rows

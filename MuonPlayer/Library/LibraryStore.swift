@@ -89,11 +89,46 @@ final class LibraryStore {
         await database.search(query)
     }
 
+    /// Albums most recently added to the library (for the Home tab).
+    func recentAlbums(limit: Int = 30) async -> [Album] {
+        await database.recentAlbums(limit: limit)
+    }
+
+    /// Grouped search: matching artists, albums, then songs. Artists and albums
+    /// are filtered from the in-memory album list (already override-aware); songs
+    /// use the SQLite full-text index.
+    func searchAll(_ query: String) async -> SearchResults {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return SearchResults() }
+
+        let songs = await database.search(q)
+
+        let artistNames = Set(albums.map(\.artist)).filter { $0.localizedCaseInsensitiveContains(q) }
+        let artists = artistNames
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .map { name in
+                ArtistResult(name: name,
+                             artworkPath: albums.first { $0.artist == name && $0.artworkPath != nil }?.artworkPath)
+            }
+
+        let matchedAlbums = albums
+            .filter { $0.title.localizedCaseInsensitiveContains(q) || $0.artist.localizedCaseInsensitiveContains(q) }
+
+        return SearchResults(artists: artists, albums: matchedAlbums, songs: songs)
+    }
+
     /// All tracks under an artist's top-level folder, ordered by album subfolder
-    /// then disc/track (used by the normal-mode playhead — "repeat artist").
+    /// then disc/track (used by the "Repeat Top Folder" playhead).
     func artistFolderTracks(for track: Track) async -> [Track] {
         guard let folder = topFolder(for: track) else { return [] }
         let tracks = await database.tracks(underRelativeTopFolder: folder)
+        return orderByFolder(tracks)
+    }
+
+    /// All tracks whose (effective) album-artist matches `track`'s, ordered by
+    /// album subfolder then disc/track (used by the "Repeat Artist" playhead).
+    func albumArtistTracks(for track: Track) async -> [Track] {
+        let tracks = await database.tracks(byAlbumArtist: track.effectiveAlbumArtist)
         return orderByFolder(tracks)
     }
 

@@ -2,10 +2,13 @@ import SwiftUI
 
 struct NowPlayingView: View {
     @Environment(Player.self) private var player
+    @Environment(LibraryStore.self) private var library
+    @Environment(TabRouter.self) private var router
     @Environment(\.dismiss) private var dismiss
-    @State private var seekPosition: Double = 0
-    @State private var isSeeking = false
     @State private var showQueue = false
+    @State private var waveform: [Float] = []
+    // Non-nil only while the user is actively dragging the waveform.
+    @State private var scrubFraction: Double?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -21,12 +24,21 @@ struct NowPlayingView: View {
                 Text(player.currentTrack?.title ?? "Not Playing")
                     .font(.title2.bold()).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(player.currentTrack?.displayArtist ?? "")
-                    .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let album = player.currentTrack?.album {
-                    Text(album).font(.subheadline).foregroundStyle(.tertiary).multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                if let track = player.currentTrack {
+                    Button { goToArtist() } label: {
+                        Text(track.displayArtist)
+                            .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .buttonStyle(.plain)
+                    if let album = track.album {
+                        Button { goToAlbum() } label: {
+                            Text(album).font(.subheadline).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(matchingAlbum(for: track) == nil)
+                    }
                 }
                 if let fmt = player.currentTrack?.formatDescription {
                     Text(fmt).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
@@ -55,33 +67,36 @@ struct NowPlayingView: View {
         }
     }
 
-    // Both labels derive from the same integer second so they update in lockstep
-    // (otherwise elapsed and remaining tick at different sub-second offsets).
+    // Playback fraction, derived straight from the player every render (the single
+    // source of truth), so it can never drift or stick mid-track. A live drag
+    // overrides it locally.
+    private var progressFraction: Double {
+        if let scrubFraction { return scrubFraction }
+        guard player.duration > 0 else { return 0 }
+        return min(1, max(0, player.currentTime / player.duration))
+    }
+
+    // Both labels derive from the same integer second so they update in lockstep.
     private var elapsedSeconds: Int {
-        Int((isSeeking ? seekPosition : player.currentTime).rounded(.down))
+        let time = scrubFraction.map { $0 * player.duration } ?? player.currentTime
+        return Int(time.rounded(.down))
     }
     private var remainingSeconds: Int {
         max(0, Int(player.duration.rounded()) - elapsedSeconds)
     }
 
-    // Single-source-of-truth slider. Binding is never swapped mid-gesture (which
-    // used to drop the editing-ended event and freeze the bar until reopened).
     private var seekBar: some View {
-        VStack(spacing: 2) {
-            Slider(value: $seekPosition, in: 0...max(player.duration, 1)) { editing in
-                if editing {
-                    isSeeking = true
-                } else {
-                    player.seek(to: seekPosition)
-                    isSeeking = false
+        VStack(spacing: 6) {
+            WaveformSeekBar(
+                samples: waveform,
+                progress: progressFraction,
+                onScrub: { scrubFraction = $0 },
+                onCommit: { fraction in
+                    player.seek(to: fraction * player.duration)
+                    scrubFraction = nil
                 }
-            }
-            .onChange(of: player.currentTime) { _, newValue in
-                if !isSeeking { seekPosition = newValue }
-            }
-            .onChange(of: player.currentTrack?.id) { _, _ in
-                if !isSeeking { seekPosition = player.currentTime }
-            }
+            )
+            .frame(height: 48)
             HStack {
                 Text(formatDuration(Double(elapsedSeconds)))
                 Spacer()
@@ -91,6 +106,12 @@ struct NowPlayingView: View {
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal)
+        .task(id: player.currentTrack?.url) {
+            waveform = []
+            guard let track = player.currentTrack else { return }
+            waveform = await WaveformStore.shared.waveform(for: track.url,
+                                                           duration: player.duration)
+        }
     }
 
     private var controls: some View {
@@ -109,10 +130,16 @@ struct NowPlayingView: View {
         .foregroundStyle(.primary)
     }
 
-    // Item #8: shuffle / repeat mode + queue access.
+    // Playback mode dropdown + queue access.
     private var secondaryControls: some View {
         HStack {
-            Button { player.mode = player.mode.next } label: {
+            Menu {
+                Picker("Playback Mode", selection: modeBinding) {
+                    ForEach(PlaybackMode.allCases) { m in
+                        Label(m.label, systemImage: m.systemImage).tag(m)
+                    }
+                }
+            } label: {
                 Label(player.mode.label, systemImage: player.mode.systemImage)
                     .font(.subheadline)
                     .foregroundStyle(player.mode == .normal ? Color.secondary : Color.accentColor)
@@ -125,6 +152,33 @@ struct NowPlayingView: View {
             }
         }
         .padding(.horizontal, 28)
+    }
+
+    private var modeBinding: Binding<PlaybackMode> {
+        Binding(get: { player.mode }, set: { player.mode = $0 })
+    }
+
+    // MARK: - Navigation (item #8)
+
+    private func goToArtist() {
+        guard let track = player.currentTrack else { return }
+        // Prefer the shown artist if it has its own page, else the album-artist
+        // (the Artists tab groups by album-artist, so that's guaranteed to exist).
+        let shown = track.displayArtist
+        let name = library.albums.contains(where: { $0.artist == shown }) ? shown : track.effectiveAlbumArtist
+        dismiss()
+        router.openArtist(name)
+    }
+
+    private func goToAlbum() {
+        guard let track = player.currentTrack, let album = matchingAlbum(for: track) else { return }
+        dismiss()
+        router.openAlbum(album)
+    }
+
+    private func matchingAlbum(for track: Track) -> Album? {
+        guard let title = track.album else { return nil }
+        return library.albums.first { $0.artist == track.effectiveAlbumArtist && $0.title == title }
     }
 
     // Item #10: what's coming next (explicit queue head, else playhead's next).

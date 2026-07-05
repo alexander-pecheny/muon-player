@@ -7,6 +7,7 @@ struct MuonPlayerApp: App {
     @State private var player = Player()
     @State private var scrobbler: ScrobbleService
     @State private var tabSettings = TabSettings()
+    @State private var router = TabRouter()
 
     init() {
         Self.configureAudioSession()
@@ -29,6 +30,7 @@ struct MuonPlayerApp: App {
                 .environment(player)
                 .environment(scrobbler)
                 .environment(tabSettings)
+                .environment(router)
                 .task {
                     // Let the playhead reach the library for artist-folder order.
                     player.library = library
