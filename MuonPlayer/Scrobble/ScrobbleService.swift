@@ -102,7 +102,23 @@ final class ScrobbleService {
 
     // MARK: - Playback hooks
 
+    /// The play currently in progress. Keeps the start timestamp stable and
+    /// remembers whether it was already scrobbled, so a single listen scrobbles
+    /// at most once and its local-history row records the right state on finish.
+    private struct PlayState { let id: UUID; let startedAt: Int; var scrobbled: Bool }
+    private var play: PlayState?
+
+    /// Whether the track playing right now has already been scrobbled this play.
+    /// Observable so the History view's live row can flip to a scrobbled state.
+    private(set) var currentScrobbled = false
+
     func nowPlaying(_ track: Track) {
+        // A genuinely new track arms a fresh play; re-entry for the same track
+        // (a seek or replay) keeps its start time and scrobbled flag.
+        if play?.id != track.id {
+            play = PlayState(id: track.id, startedAt: Int(Date().timeIntervalSince1970), scrobbled: false)
+            currentScrobbled = false
+        }
         guard isLoggedIn else { return }
         let s = LastFMClient.Scrobble(
             artist: track.displayArtist, album: track.album, title: track.title,
@@ -112,37 +128,67 @@ final class ScrobbleService {
         Task { try? await client.updateNowPlaying(s) }
     }
 
+    /// Called mid-playback the moment the track first meets Last.fm's eligibility
+    /// rule. Queues the scrobble to SQLite immediately (and flushes if online) —
+    /// no longer deferred to the next track change.
+    func scrobbleEligible(_ track: Track) {
+        guard isLoggedIn, var p = play, p.id == track.id, !p.scrobbled else { return }
+        p.scrobbled = true
+        play = p
+        currentScrobbled = true
+
+        let artist = track.displayArtist
+        let album = track.album
+        let title = track.title
+        let duration = track.duration ?? 0
+        Task {
+            await database.insertScrobble(artist: artist, album: album, title: title,
+                                          timestamp: p.startedAt, duration: Int(duration))
+            await refreshPendingCount()
+            flush()
+        }
+    }
+
     /// Called when a track stops being current. Records it to the local play
-    /// history (always) and, if it meets Last.fm's eligibility rule and the user
-    /// is signed in, also queues a scrobble to SQLite (even offline).
+    /// history. The scrobble itself (if any) was already queued mid-playback by
+    /// `scrobbleEligible`, so this only reflects that outcome in the history row.
     func trackFinished(_ track: Track, played: TimeInterval) {
         // Ignore accidental blips / rapid skips.
         guard played >= 4 else { return }
 
-        let startedAt = Int(Date().timeIntervalSince1970 - played)
+        let duration = track.duration ?? 0
+        // Backstop: if the mid-play eligibility emit was somehow missed but the
+        // final played time qualifies, scrobble now. Idempotent — a no-op if it
+        // already scrobbled or the user is signed out.
+        if duration > 30, played >= min(duration / 2, 240) {
+            scrobbleEligible(track)
+        }
+
+        let scrobbled = play?.id == track.id && (play?.scrobbled ?? false)
+        let startedAt = play?.id == track.id ? play!.startedAt
+                                             : Int(Date().timeIntervalSince1970 - played)
+        if play?.id == track.id { play = nil; currentScrobbled = false }
+
         let artist = track.displayArtist
         let album = track.album
         let title = track.title
         let path = track.url.path
 
-        let duration = track.duration ?? 0
-        let meetsRule = duration > 30 && played >= min(duration / 2, 240)
-        let willScrobble = meetsRule && isLoggedIn
-
         Task {
-            if willScrobble {
-                await database.insertScrobble(artist: artist, album: album, title: title,
-                                              timestamp: startedAt, duration: Int(duration))
+            // Resolve the state now: the scrobble was queued mid-play and is often
+            // already accepted by the time the track ends, so a plain `.pending`
+            // could get stuck (markHistoryScrobbled ran before this row existed).
+            let state: HistoryEntry.ScrobbleState
+            if scrobbled {
+                let accepted = await database.scrobbleState(artist: artist, title: title, timestamp: startedAt)
+                state = accepted == true ? .scrobbled : .pending
+            } else {
+                state = .ineligible
             }
             await database.insertHistory(path: path, artist: artist, album: album, title: title,
-                                         playedAt: startedAt,
-                                         state: willScrobble ? .pending : .ineligible,
+                                         playedAt: startedAt, state: state,
                                          duration: duration > 0 ? Int(duration.rounded()) : nil,
                                          listened: Int(played.rounded()))
-            if willScrobble {
-                await refreshPendingCount()
-                flush()
-            }
         }
     }
 

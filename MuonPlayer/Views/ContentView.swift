@@ -17,6 +17,9 @@ struct ContentView: View {
 
     var body: some View {
         content
+            // App-wide tint follows the current track's artwork (mini player,
+            // tab bar selection, buttons, swipe actions…). See DominantColor.
+            .tint(player.accentColor)
             .sheet(isPresented: $showNowPlaying) { NowPlayingView() }
             .onAppear {
                 if !didInitSelection {
@@ -162,11 +165,11 @@ private struct MiniAccessory: View {
                     .frame(width: 32, height: 32)
                     .clipShape(RoundedRectangle(cornerRadius: 5))
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 0) {
                     Text(player.currentTrack?.title ?? "")
-                        .font(.subheadline.weight(.medium)).lineLimit(1)
+                        .font(.system(size: 14.5, weight: .medium)).lineLimit(1)
                     if let artist = player.currentTrack?.artist {
-                        Text(artist).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        Text(artist).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 4)
@@ -186,6 +189,8 @@ private struct MiniAccessory: View {
             }
             MiniWaveform(height: 12)
         }
+        // Lift the row off the accessory's top edge and sit it nearer the waveform.
+        .padding(.top, 6)
         .padding(.horizontal, 12)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)

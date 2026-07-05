@@ -18,7 +18,8 @@ struct MiniWaveform: View {
 
     var body: some View {
         WaveformSeekBar(samples: waveform, progress: progress, interactive: false,
-                        minBarHeight: 2, barWidth: barWidth, barSpacing: barSpacing)
+                        minBarHeight: 2, barWidth: barWidth, barSpacing: barSpacing,
+                        accent: player.accentColor)
             .frame(height: height)
             .allowsHitTesting(false)
             .task(id: player.currentTrack?.url) {
