@@ -21,6 +21,9 @@ struct WaveformSeekBar: View {
     /// spaced (SoundCloud-style) — never sub-pixel slivers that cluster.
     var barWidth: CGFloat = 3
     var barSpacing: CGFloat = 2
+    /// Color of the played portion. Defaults to the system accent; callers pass
+    /// the artwork-derived accent so the bar matches the current track.
+    var accent: Color = .accentColor
 
     @State private var dragFraction: Double?
 
@@ -36,7 +39,7 @@ struct WaveformSeekBar: View {
                     // A bar is "played" once the playhead passes its center.
                     let center = (Double(i) + 0.5) / Double(count)
                     Capsule()
-                        .fill(center <= shown ? Color.accentColor : Color.secondary.opacity(0.28))
+                        .fill(center <= shown ? accent : Color.secondary.opacity(0.28))
                         .frame(width: barWidth,
                                height: max(minBarHeight, CGFloat(bars[i]) * geo.size.height))
                 }

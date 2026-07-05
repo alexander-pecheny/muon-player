@@ -1,6 +1,7 @@
 import AVFoundation
 import MediaPlayer
 import Observation
+import SwiftUI
 
 /// Gapless audio player built on AVAudioEngine + a single AVAudioPlayerNode.
 ///
@@ -31,6 +32,18 @@ final class Player {
     var onTrackStarted: ((Track) -> Void)?
     /// Fired when a track stops being the current track, with how long it played.
     var onTrackFinished: ((Track, TimeInterval) -> Void)?
+    /// Fired once, mid-playback, the moment the current track first crosses
+    /// Last.fm's scrobble-eligibility threshold (>30s track, past its halfway
+    /// point or 4 min). Lets the scrobble be submitted immediately rather than
+    /// waiting for the track to change.
+    var onScrobbleEligible: ((Track) -> Void)?
+    // Guards `onScrobbleEligible` to one emission per play; re-armed on each
+    // new (or restarted) track.
+    private var eligibleReported = false
+    // Actual seconds of forward playback for the current track (pauses don't
+    // advance it, seeks don't inflate it). Drives eligibility so "listened
+    // enough" reflects real listening, not just playhead position.
+    private var playedAccumulator: TimeInterval = 0
 
     /// Set by the app so the playhead can fetch an artist's folder tracks.
     weak var library: LibraryStore?
@@ -251,6 +264,8 @@ final class Player {
         duration = track.duration ?? 0
         currentTime = offset
         lastReportedTrackID = nil
+        eligibleReported = false
+        playedAccumulator = 0
 
         // Bump the generation *before* stopping the node. The feeder checks the
         // generation on every scheduling iteration (see feedIfNeeded), so any
@@ -435,6 +450,8 @@ final class Player {
             }
             lastReportedTrackID = seg.track.id
             reportedTrackStartFrame = seg.startFrame
+            eligibleReported = false
+            playedAccumulator = 0
             currentTrack = seg.track
             duration = seg.duration
             onTrackStarted?(seg.track)
@@ -450,8 +467,24 @@ final class Player {
             refreshUpNext()
         }
 
-        currentTime = seg.startOffset + Double(frame - seg.startFrame) / CanonicalAudio.sampleRate
+        let newTime = seg.startOffset + Double(frame - seg.startFrame) / CanonicalAudio.sampleRate
+        // Count only smooth forward progress toward "listened" — a large jump is
+        // a seek (don't credit skipped audio) and a negative delta is a rewind.
+        let delta = newTime - currentTime
+        if delta > 0, delta < 2 { playedAccumulator += delta }
+        currentTime = newTime
+        maybeReportEligible()
         updateNowPlayingInfo()
+    }
+
+    /// Emit `onScrobbleEligible` the first time the current track has been played
+    /// enough to meet Last.fm's rule (>30s long, at least half its length or 4
+    /// min of actual playback).
+    private func maybeReportEligible() {
+        guard !eligibleReported, let track = currentTrack, duration > 30,
+              playedAccumulator >= min(duration / 2, 240) else { return }
+        eligibleReported = true
+        onScrobbleEligible?(track)
     }
 
     private func noMoreAudioSnapshot() -> Bool {
@@ -478,16 +511,24 @@ final class Player {
 
     private(set) var currentArtwork: PlatformImage?
 
+    /// A vivid accent derived from the current track's artwork (Spotify-style),
+    /// used app-wide as the tint. Falls back to the system accent when there's no
+    /// artwork or it's grayscale.
+    private(set) var accentColor: Color = .accentColor
+
     private func loadArtwork(for track: Track) {
         currentArtwork = nil
+        accentColor = .accentColor
         guard track.hasArtwork else { return }
         let url = track.url
         Task.detached(priority: .utility) {
             let meta = FFmpegMetadata.read(url: url, includeArtwork: true)
             guard let data = meta.artwork, let image = PlatformImage(data: data) else { return }
+            let accent = DominantColor.from(image)
             await MainActor.run { [weak self] in
                 guard let self, self.currentTrack?.url == url else { return }
                 self.currentArtwork = image
+                if let accent { self.accentColor = accent }
                 self.updateNowPlayingInfo()
             }
         }

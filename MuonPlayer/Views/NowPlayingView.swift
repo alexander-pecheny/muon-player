@@ -54,6 +54,7 @@ struct NowPlayingView: View {
             Spacer(minLength: 0)
         }
         .padding(.bottom)
+        .tint(player.accentColor)
         .presentationDragIndicator(.hidden)
         .sheet(isPresented: $showQueue) { QueueView() }
     }
@@ -94,7 +95,8 @@ struct NowPlayingView: View {
                 onCommit: { fraction in
                     player.seek(to: fraction * player.duration)
                     scrubFraction = nil
-                }
+                },
+                accent: player.accentColor
             )
             .frame(height: 48)
             HStack {
@@ -142,7 +144,7 @@ struct NowPlayingView: View {
             } label: {
                 Label(player.mode.label, systemImage: player.mode.systemImage)
                     .font(.subheadline)
-                    .foregroundStyle(player.mode == .normal ? Color.secondary : Color.accentColor)
+                    .foregroundStyle(player.mode == .normal ? Color.secondary : player.accentColor)
             }
             Spacer()
             Button { showQueue = true } label: {

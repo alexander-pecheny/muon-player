@@ -523,6 +523,25 @@ actor Database {
         return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
     }
 
+    /// State of the scrobble matching this play: `true` = already accepted by
+    /// Last.fm, `false` = queued but still pending, `nil` = none was ever queued.
+    /// Lets a history row be written with the correct state even when the
+    /// scrobble was accepted before the row existed.
+    func scrobbleState(artist: String, title: String, timestamp: Int) -> Bool? {
+        guard let stmt = prepare("""
+        SELECT is_scrobbled FROM scrobbles
+        WHERE artist=? AND title=? AND ABS(timestamp-?)<=2
+        ORDER BY ABS(timestamp-?) LIMIT 1;
+        """) else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, artist)
+        bindText(stmt, 2, title)
+        sqlite3_bind_int64(stmt, 3, Int64(timestamp))
+        sqlite3_bind_int64(stmt, 4, Int64(timestamp))
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(stmt, 0) == 1
+    }
+
     // MARK: - Tag editing (non-destructive overrides)
 
     /// Apply overrides to a single track. A non-nil field is written as-is (an

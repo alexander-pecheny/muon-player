@@ -41,6 +41,9 @@ struct MuonPlayerApp: App {
                     player.onTrackFinished = { [scrobbler] track, played in
                         scrobbler.trackFinished(track, played: played)
                     }
+                    player.onScrobbleEligible = { [scrobbler] track in
+                        scrobbler.scrobbleEligible(track)
+                    }
                     scrobbler.start()
                     await library.loadFromDatabase()
                     await library.rescan()

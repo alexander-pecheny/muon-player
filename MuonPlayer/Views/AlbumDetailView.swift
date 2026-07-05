@@ -53,21 +53,26 @@ struct AlbumDetailView: View {
                 .frame(maxWidth: .infinity)
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+                // The Play/Queue buttons already divide header from tracklist.
+                .listRowSeparator(.hidden)
             }
 
             Section {
                 ForEach(tracks) { track in
                     TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url,
-                             hideArtist: artistMatchesAlbum(track))
+                             hideArtist: artistMatchesAlbum(track), accent: player.accentColor)
                         .contentShape(Rectangle())
                         .onTapGesture { player.play(track: track, context: tracks) }
                         .swipeActions(edge: .trailing) {
                             Button {
                                 player.enqueue(track, context: tracks)
                             } label: { Label("Queue", systemImage: "text.append") }
-                            .tint(.accentColor)
+                            .tint(player.accentColor)
                         }
                         .contextMenu { trackMenu(track) }
+                        // No dangling rule above the first or below the last track.
+                        .listRowSeparator(track.url == tracks.first?.url ? .hidden : .automatic, edges: .top)
+                        .listRowSeparator(track.url == tracks.last?.url ? .hidden : .automatic, edges: .bottom)
                 }
             }
         }
@@ -138,6 +143,8 @@ struct TrackRow: View {
     var isCurrent: Bool = false
     /// When true, the artist subtitle is suppressed (album view, same artist).
     var hideArtist: Bool = false
+    /// Accent for the current-track highlight — the app-wide artwork color.
+    var accent: Color = .accentColor
 
     var body: some View {
         HStack(spacing: 12) {
@@ -149,7 +156,7 @@ struct TrackRow: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
-                    .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                    .foregroundStyle(isCurrent ? accent : .primary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !hideArtist, let artist = track.artist {
                     Text(artist).font(.caption).foregroundStyle(.secondary)
@@ -158,7 +165,7 @@ struct TrackRow: View {
             }
             Spacer(minLength: 8)
             if isCurrent {
-                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(Color.accentColor)
+                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(accent)
             }
             if let d = track.duration {
                 Text(formatDuration(d)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
