@@ -45,6 +45,7 @@ struct Track: Identifiable, Sendable, Hashable {
     let composer: String?
     let trackNo: Int?
     let discNo: Int?
+    let year: Int?
     let duration: TimeInterval?
     let bitrate: Int?      // bits per second
     let codec: String?     // decoder codec name, e.g. "aac", "flac", "alac"
@@ -62,6 +63,7 @@ struct Track: Identifiable, Sendable, Hashable {
         composer: String? = nil,
         trackNo: Int? = nil,
         discNo: Int? = nil,
+        year: Int? = nil,
         duration: TimeInterval? = nil,
         bitrate: Int? = nil,
         codec: String? = nil,
@@ -77,6 +79,7 @@ struct Track: Identifiable, Sendable, Hashable {
         self.composer = composer
         self.trackNo = trackNo
         self.discNo = discNo
+        self.year = year
         self.duration = duration
         self.bitrate = bitrate
         self.codec = codec

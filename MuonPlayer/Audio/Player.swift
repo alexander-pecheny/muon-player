@@ -22,7 +22,7 @@ final class Player {
     /// What plays next: the head of the explicit queue, else the playhead's next.
     private(set) var nextUpTrack: Track?
 
-    /// Playback order mode (normal = repeat-artist playhead, shuffle, repeat…).
+    /// Playback order / repeat scope (see PlaybackMode).
     var mode: PlaybackMode = .normal {
         didSet { guard mode != oldValue else { return }; Task { await applyMode() } }
     }
@@ -40,9 +40,9 @@ final class Player {
     // The album the user started from (used for repeat-album and as a fallback
     // when a track isn't inside an artist folder).
     private var albumContext: [Track] = []
-    // The artist folder the current timeline was built for (nil once built for a
-    // track that has no artist folder). `timelineBuilt` disambiguates unset.
-    private var timelineFolder: String?
+    // The scope key the current timeline was built for (folder path / album-artist
+    // / album, depending on mode). `timelineBuilt` disambiguates unset.
+    private var timelineScope: String?
     private var timelineBuilt = false
 
     private let engine = AVAudioEngine()
@@ -99,39 +99,57 @@ final class Player {
     // MARK: - Playback mode / playhead
 
     private func applyLoopFlags() {
-        queue.repeatOne = (mode == .repeatTrack)
-        queue.loops = (mode != .repeatTrack)
+        queue.repeatOne = mode.repeatsOne
+        queue.loops = mode.loops
+    }
+
+    /// The scope identity the timeline should follow in the current mode. When the
+    /// currently-playing track no longer matches it (e.g. a queued cross-album
+    /// track played), the timeline is re-anchored around the new track.
+    private func scopeKey(for track: Track) -> String {
+        switch mode {
+        case .repeatTopFolder, .shuffle:
+            return "folder:" + (library?.topFolder(for: track) ?? track.url.deletingLastPathComponent().path)
+        case .repeatArtist:
+            return "artist:" + track.effectiveAlbumArtist
+        case .normal, .repeatAlbum, .repeatTrack:
+            return "album:" + track.effectiveAlbumArtist + "\u{1}" + track.displayAlbum
+        }
     }
 
     /// Rebuild the automatic play order around `anchor` for the current mode,
     /// without interrupting what's currently playing.
     private func rebuildTimeline(anchor: Track) async {
-        let folder = library?.topFolder(for: anchor)
         var timeline: [Track]
         switch mode {
-        case .repeatTrack, .repeatAlbum:
+        case .normal, .repeatAlbum, .repeatTrack:
             timeline = albumContext.isEmpty ? [anchor] : albumContext
-        case .normal:
-            let artist = await library?.artistFolderTracks(for: anchor) ?? []
-            timeline = artist.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : artist
+        case .repeatTopFolder:
+            let folder = await library?.artistFolderTracks(for: anchor) ?? []
+            timeline = folder.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : folder
+        case .repeatArtist:
+            let byArtist = await library?.albumArtistTracks(for: anchor) ?? []
+            timeline = byArtist.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : byArtist
         case .shuffle:
-            let artist = await library?.artistFolderTracks(for: anchor) ?? []
-            let base = artist.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : artist
+            let folder = await library?.artistFolderTracks(for: anchor) ?? []
+            let base = folder.isEmpty ? (albumContext.isEmpty ? [anchor] : albumContext) : folder
             timeline = shuffled(base, anchor: anchor)
         }
         // Match by url, not value equality: the timeline is a fresh DB fetch, so
         // its Track instances carry different (random) ids than `anchor` and
         // `firstIndex(of:)` would never match — the playhead would snap to index 0
-        // and queue up the artist folder's second track instead of the anchor's
-        // real successor.
+        // and queue up the scope's second track instead of the anchor's real
+        // successor.
         let idx = timeline.firstIndex(where: { $0.url == anchor.url }) ?? 0
         _ = queue.setContext(timeline, startIndex: idx)
         applyLoopFlags()
-        timelineFolder = folder
+        timelineScope = scopeKey(for: anchor)
         timelineBuilt = true
         refreshUpNext()
     }
 
+    /// Shuffle `tracks`, keeping `anchor` first so playback continues from the
+    /// currently-playing track.
     private func shuffled(_ tracks: [Track], anchor: Track) -> [Track] {
         var s = tracks.shuffled()
         if let i = s.firstIndex(where: { $0.url == anchor.url }) {
@@ -422,11 +440,10 @@ final class Player {
             onTrackStarted?(seg.track)
             loadArtwork(for: seg.track)
 
-            // Crossed into a different artist folder (e.g. a queued cross-artist
-            // track played) — re-anchor the timeline so normal mode keeps
-            // repeating the *new* artist.
-            let folder = library?.topFolder(for: seg.track)
-            if !timelineBuilt || folder != timelineFolder {
+            // Crossed out of the timeline's scope (e.g. a queued cross-album
+            // track played) — re-anchor so the repeat scope follows the new track.
+            let key = scopeKey(for: seg.track)
+            if !timelineBuilt || key != timelineScope {
                 let anchor = seg.track
                 Task { await rebuildTimeline(anchor: anchor) }
             }

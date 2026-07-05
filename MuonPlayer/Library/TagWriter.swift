@@ -130,6 +130,9 @@ private enum MP4 {
         if let trk = edits.trackNo {
             replaceItem(in: ilst, type: "trkn", dataPayload: trackData(trk))
         }
+        if let year = edits.year {
+            replaceItem(in: ilst, type: "\u{A9}day", dataPayload: textData(String(year)))
+        }
     }
 
     /// UTF-8 `data` atom payload: type-indicator 1 (text) + 4-byte locale + text.
@@ -322,6 +325,12 @@ private enum ID3 {
         set(&frames, "TPE2", edits.albumArtist)
         set(&frames, "TCOM", edits.composer)
         if let trk = edits.trackNo { set(&frames, "TRCK", String(trk)) }
+        // ID3v2.4 recording time (year). Also drop the legacy v2.3 TYER frame if
+        // present so the two can't disagree.
+        if let year = edits.year {
+            frames.removeAll { $0.id == "TYER" }
+            set(&frames, "TDRC", String(year))
+        }
 
         // Emit as a clean ID3v2.4 tag (syncsafe frame sizes, UTF-8 for edits;
         // preserved frames keep their own encoding byte and content).
@@ -496,6 +505,11 @@ private enum VorbisComment {
         setC("ALBUMARTIST", edits.albumArtist)
         setC("COMPOSER", edits.composer)
         if let trk = edits.trackNo { setC("TRACKNUMBER", String(trk)) }
+        if let year = edits.year {
+            // DATE is the canonical Vorbis field; clear YEAR so they don't disagree.
+            comments.removeAll { $0.uppercased().hasPrefix("YEAR=") }
+            setC("DATE", String(year))
+        }
     }
 }
 

@@ -136,7 +136,9 @@ final class ScrobbleService {
             }
             await database.insertHistory(path: path, artist: artist, album: album, title: title,
                                          playedAt: startedAt,
-                                         state: willScrobble ? .pending : .ineligible)
+                                         state: willScrobble ? .pending : .ineligible,
+                                         duration: duration > 0 ? Int(duration.rounded()) : nil,
+                                         listened: Int(played.rounded()))
             if willScrobble {
                 await refreshPendingCount()
                 flush()

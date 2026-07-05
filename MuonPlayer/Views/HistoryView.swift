@@ -18,6 +18,11 @@ struct HistoryView: View {
                         Text(entry.artist)
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if let listen = listenLabel(entry) {
+                            Text(listen)
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     Spacer(minLength: 8)
                     Text(Self.relative(entry.playedAt))
@@ -40,6 +45,19 @@ struct HistoryView: View {
 
     private func reload() async {
         entries = await library.history()
+    }
+
+    /// "1:47 of 3:52 listened" — how long the user actually spent on the track vs
+    /// its length. Older rows without this data show nothing.
+    private func listenLabel(_ entry: HistoryEntry) -> String? {
+        switch (entry.listened, entry.duration) {
+        case let (listened?, length?):
+            return "\(formatDuration(Double(listened))) of \(formatDuration(Double(length))) listened"
+        case let (listened?, nil):
+            return "\(formatDuration(Double(listened))) listened"
+        default:
+            return nil
+        }
     }
 
     @ViewBuilder private func scrobbleIcon(_ state: HistoryEntry.ScrobbleState) -> some View {
