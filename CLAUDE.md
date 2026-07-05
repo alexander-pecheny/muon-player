@@ -1,0 +1,112 @@
+# MuonPlayer — build / test / deploy notes
+
+iOS music player. SwiftUI + AVAudioEngine, gapless playback via a single player
+node, FFmpeg for decode/metadata, SQLite for the library. Bundle id
+`me.pecheny.muonplayer`.
+
+## Project generation (XcodeGen)
+
+The `.xcodeproj` is **generated and gitignored** — never edit it by hand.
+
+```bash
+xcodegen generate      # after adding/removing/renaming any source file
+```
+
+Sources under `MuonPlayer/` are auto-included, so adding a new `.swift` file just
+needs a regenerate — no `project.yml` edit. `project.yml` is the source of truth
+for targets/settings.
+
+## Prerequisites (gitignored, must exist before first build)
+
+1. **FFmpeg xcframeworks** — `Vendor/FFmpeg/*.xcframework` (+ `include/module.modulemap`,
+   imported in Swift as `CFFmpeg`). `Vendor/` is committed, so usually already
+   present. Rebuild with `scripts/build-ffmpeg.sh` (a few minutes) if missing.
+2. **`MuonPlayer/Secrets.swift`** — `scripts/gen-secrets.sh` generates it from
+   `.env` (Last.fm key/secret + username/password). Both `.env` and `Secrets.swift`
+   are gitignored; a fresh checkout won't compile until this runs. Without valid
+   creds, scrobbling still queues locally but won't submit.
+
+## Build & test (simulator)
+
+```bash
+SIM='platform=iOS Simulator,name=iPhone 17'
+xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer -sdk iphonesimulator \
+  -destination "$SIM" -configuration Debug build
+
+xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer \
+  -destination "$SIM" test
+```
+
+Tests use **Swift Testing** (`@Test`/`#expect`), not XCTest. The XCTest summary
+line prints `Executed 0 tests` — that's expected; the real results are the
+`✔ Test …` / `✔ Test run with N tests in M suites passed` lines (currently
+22 tests in 4 suites).
+
+## Run in the simulator
+
+```bash
+APP=$(find ~/Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/Debug-iphonesimulator -maxdepth 1 -name MuonPlayer.app | head -1)
+xcrun simctl install booted "$APP"
+xcrun simctl launch booted me.pecheny.muonplayer
+xcrun simctl io booted screenshot /tmp/shot.png
+```
+
+Load test audio into the app's Documents dir (rescanned on launch):
+```bash
+DOCS=$(xcrun simctl get_app_container booted me.pecheny.muonplayer data)/Documents
+```
+Clean up stray `.caf` capture files there — they get rescanned as "Unknown Album".
+
+Env-gated launch self-tests (`GaplessSelfTest`, `SwitchNoiseSelfTest`,
+`SkipScrobbleSelfTest`, `PlayheadSelfTest`, `ScrobbleSelfTest`, `ArtworkSelfTest`)
+are triggered with `SIMCTL_CHILD_`-prefixed env vars, e.g.
+`SIMCTL_CHILD_MUON_PLAYHEADTEST=1 xcrun simctl launch booted me.pecheny.muonplayer`.
+Each writes a `*.done` report into Documents.
+
+## Driving the simulator UI (idb)
+
+`idb` lives in a Python 3.11 venv (fb-idb breaks on 3.14); companion via brew.
+```bash
+IDB=~/idbenv/bin/idb          # setup: brew install facebook/fb/idb-companion
+                              #        uv venv --python 3.11 ~/idbenv && uv pip install --python ~/idbenv/bin/python fb-idb
+UDID=$(xcrun simctl list devices booted | grep -oE '[0-9A-F-]{36}' | head -1)
+$IDB ui tap  --udid $UDID X Y
+$IDB ui swipe --udid $UDID X1 Y1 X2 Y2 --duration 0.4
+$IDB ui text --udid $UDID "query"
+```
+**Coordinates are in POINTS, not pixels.** iPhone 17 is 402×874 pt; screenshots
+are 3× (1206×2622 px) — divide screenshot pixel coords by 3. `$IDB describe`
+prints `width_points`/`height_points`.
+
+## Deploy to a physical iPhone
+
+Device UDID for `xcodebuild` comes from `xctrace`/`-showdestinations`, **not**
+`devicectl` (they differ). Signing team is `B5T934YFU5` (personal team,
+ap@pecheny.me); automatic signing.
+
+```bash
+DEV_UDID=$(xcrun xctrace list devices 2>&1 | grep -v Simulator | grep -i iphone | grep -oE '\([0-9A-F-]{25,}\)' | tr -d '()' | head -1)
+xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer -configuration Debug \
+  -destination "platform=iOS,id=$DEV_UDID" \
+  -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=B5T934YFU5 build
+
+# install (devicectl uses its OWN device id — `xcrun devicectl list devices`)
+APP=$(find ~/Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/Debug-iphoneos -maxdepth 1 -name MuonPlayer.app | head -1)
+xcrun devicectl device install app --device "$(xcrun devicectl list devices | grep -i 'iphone' | grep connected | awk '{print $3}')" "$APP"
+```
+
+## App icon
+
+Single 1024×1024 PNG at `MuonPlayer/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
+(`ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`). It is generated:
+
+```bash
+cd design/icon
+python3 gen_icon.py                         # tunables at top; writes icon.svg
+rsvg-convert -w 1024 -h 1024 icon.svg -o /tmp/raw.png   # brew install librsvg
+python3 -c "from PIL import Image; Image.open('/tmp/raw.png').convert('RGB').save('/tmp/AppIcon-1024.png')"  # strip alpha (iOS requires opaque)
+cp /tmp/AppIcon-1024.png ../../MuonPlayer/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+```
+
+The icon: a schematic front-on speaker driver flanked by radiating waves shaped
+like `(((((o))` — the arcs also spell "muon" (m + u, the driver as o, n).
