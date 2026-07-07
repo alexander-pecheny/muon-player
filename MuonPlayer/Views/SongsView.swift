@@ -25,7 +25,7 @@ struct SongsView: View {
                         Button {
                             player.enqueue(track, context: filtered)
                         } label: { Label("Queue", systemImage: "text.append") }
-                        .tint(.accentColor)
+                        .tint(player.accentColor)
                     }
             }
         }

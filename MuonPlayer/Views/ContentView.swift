@@ -112,11 +112,22 @@ private struct MoreTab: View {
 }
 
 /// The root content for a tab, with its title. Shared by the visible tabs and
-/// the overflow (More) list so both render identically.
+/// the overflow (More) list so both render identically. A library scan affects
+/// every tab, so the scan status overlay lives here rather than on one screen.
 private struct TabRootView: View {
+    @Environment(LibraryStore.self) private var library
     let tab: AppTab
 
     var body: some View {
+        rootContent
+            .overlay(alignment: .bottom) {
+                if library.isScanning, let p = library.scanProgress {
+                    ScanStatusCapsule(done: p.done, total: p.total)
+                }
+            }
+    }
+
+    @ViewBuilder private var rootContent: some View {
         switch tab {
         case .albums: AlbumsView().navigationTitle("Albums")
         case .artists: ArtistsView().navigationTitle("Artists")
@@ -126,6 +137,21 @@ private struct TabRootView: View {
         case .history: HistoryView().navigationTitle("History")
         case .settings: SettingsView().navigationTitle("Settings")
         }
+    }
+}
+
+/// The "Scanning N/M…" pill shown while the library indexes. Uses tabular
+/// (monospaced) digits so the counter doesn't jitter its width as it counts up.
+private struct ScanStatusCapsule: View {
+    let done: Int
+    let total: Int
+
+    var body: some View {
+        Text("Scanning \(done)/\(total)…")
+            .font(.caption.monospacedDigit())
+            .padding(6)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(.bottom, 4)
     }
 }
 

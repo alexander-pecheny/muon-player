@@ -132,7 +132,7 @@ struct HomeView: View {
                                 Button {
                                     player.enqueue(track, context: results.songs)
                                 } label: { Label("Queue", systemImage: "text.append") }
-                                .tint(.accentColor)
+                                .tint(player.accentColor)
                             }
                     }
                 }

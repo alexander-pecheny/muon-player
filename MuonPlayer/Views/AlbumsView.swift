@@ -42,15 +42,6 @@ struct AlbumsView: View {
                 }
             }
         }
-        .overlay(alignment: .bottom) {
-            if library.isScanning, let p = library.scanProgress {
-                Text("Scanning \(p.done)/\(p.total)…")
-                    .font(.caption)
-                    .padding(6)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 4)
-            }
-        }
     }
 
     private var emptyState: some View {

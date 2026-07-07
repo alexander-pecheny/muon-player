@@ -12,6 +12,19 @@ import UIKit
 /// Grayscale or artless input yields `nil`, so callers fall back to the system
 /// accent. Extraction is cheap: the image is drawn into a tiny 48×48 buffer and
 /// the pixels are binned by hue, weighted toward vivid, well-lit ones.
+extension Color {
+    /// Neutral tint used when there's no artwork-derived accent (nothing playing,
+    /// or grayscale artwork). Deliberately a system gray rather than the system
+    /// blue, so the app reads as neutral until a track colors it.
+    static var neutralAccent: Color {
+        #if canImport(UIKit)
+        Color(uiColor: .systemGray)
+        #else
+        Color.gray
+        #endif
+    }
+}
+
 enum DominantColor {
     static func from(_ image: PlatformImage) -> Color? {
         guard let cg = cgImage(from: image),

@@ -15,6 +15,7 @@ struct TagEditView: View {
 
     let scope: Scope
     @Environment(LibraryStore.self) private var library
+    @Environment(Player.self) private var player
     @Environment(\.dismiss) private var dismiss
 
     // Field state + the initial values, so only changed fields are written.
@@ -77,7 +78,7 @@ struct TagEditView: View {
         return LabeledContent(label) {
             HStack(spacing: 6) {
                 if changed {
-                    Circle().fill(Color.accentColor).frame(width: 7, height: 7)
+                    Circle().fill(player.accentColor).frame(width: 7, height: 7)
                         .transition(.scale)
                 }
                 TextField(label, text: text)
