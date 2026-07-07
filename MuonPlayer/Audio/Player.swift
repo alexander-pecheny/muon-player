@@ -23,10 +23,16 @@ final class Player {
     /// What plays next: the head of the explicit queue, else the playhead's next.
     private(set) var nextUpTrack: Track?
 
-    /// Playback order / repeat scope (see PlaybackMode).
+    /// Playback order / repeat scope (see PlaybackMode). Persisted across launches
+    /// so a chosen mode (e.g. Repeat Artist) survives an app restart.
     var mode: PlaybackMode = .normal {
-        didSet { guard mode != oldValue else { return }; Task { await applyMode() } }
+        didSet {
+            guard mode != oldValue else { return }
+            UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+            Task { await applyMode() }
+        }
     }
+    private static let modeKey = "playbackMode"
 
     /// Fired when a track begins playing (for "now playing" scrobble update).
     var onTrackStarted: ((Track) -> Void)?
@@ -82,6 +88,14 @@ final class Player {
     private var reportedTrackStartFrame: AVAudioFramePosition = 0
 
     init() {
+        // Restore the persisted playback mode. Assigning a stored property inside
+        // the defining class's own initializer does not fire `didSet`, so this
+        // just seeds the initial value (loop flags are applied when playback
+        // starts) without kicking off an applyMode() before the graph is ready.
+        if let raw = UserDefaults.standard.string(forKey: Self.modeKey),
+           let saved = PlaybackMode(rawValue: raw) {
+            mode = saved
+        }
         setupEngine()
         setupRemoteCommands()
     }
@@ -514,11 +528,11 @@ final class Player {
     /// A vivid accent derived from the current track's artwork (Spotify-style),
     /// used app-wide as the tint. Falls back to the system accent when there's no
     /// artwork or it's grayscale.
-    private(set) var accentColor: Color = .accentColor
+    private(set) var accentColor: Color = .neutralAccent
 
     private func loadArtwork(for track: Track) {
         currentArtwork = nil
-        accentColor = .accentColor
+        accentColor = .neutralAccent
         guard track.hasArtwork else { return }
         let url = track.url
         Task.detached(priority: .utility) {

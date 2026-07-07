@@ -51,7 +51,7 @@ struct FoldersView: View {
                                 Button {
                                     player.enqueue(track, context: trackFiles)
                                 } label: { Label("Queue", systemImage: "text.append") }
-                                .tint(.accentColor)
+                                .tint(player.accentColor)
                             }
                             .contextMenu {
                                 Button {

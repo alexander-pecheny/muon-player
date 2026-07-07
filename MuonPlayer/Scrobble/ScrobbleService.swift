@@ -12,6 +12,10 @@ import Observation
 @Observable
 final class ScrobbleService {
     private(set) var pendingCount = 0
+    /// Bumped after a finished play is written to the history table, so the
+    /// History view can reload the moment a row actually exists (rather than
+    /// racing the async insert on the next track change).
+    private(set) var historyVersion = 0
     private(set) var username: String?
     private(set) var isBusy = false
     private(set) var lastError: String?
@@ -189,6 +193,9 @@ final class ScrobbleService {
                                          playedAt: startedAt, state: state,
                                          duration: duration > 0 ? Int(duration.rounded()) : nil,
                                          listened: Int(played.rounded()))
+            // Row now exists — signal the History view to reload (back on the main
+            // actor, since this Task inherits ScrobbleService's isolation).
+            historyVersion += 1
         }
     }
 

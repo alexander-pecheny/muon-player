@@ -46,6 +46,9 @@ struct HistoryView: View {
         .refreshable { await reload() }
         // Reload whenever the current track changes (new plays get recorded)…
         .task(id: player.currentTrack?.id) { await reload() }
+        // …when a finished play is recorded (so the just-ended track appears
+        // immediately, without a tab switch)…
+        .onChange(of: scrobbler.historyVersion) { Task { await reload() } }
         // …and when a scrobble is accepted, so rows flip pending → scrobbled.
         .onChange(of: scrobbler.pendingCount) { Task { await reload() } }
     }

@@ -7,6 +7,9 @@ struct AlbumDetailView: View {
     @State private var tracks: [Track] = []
     @State private var editingAlbum = false
     @State private var editingTrack: Track?
+    // This album's own artwork color, independent of what's playing — so a red
+    // album never gets tinted by a green now-playing track (and vice versa).
+    @State private var albumAccent: Color = .neutralAccent
     @Environment(\.navPath) private var navPath
 
     var body: some View {
@@ -60,14 +63,14 @@ struct AlbumDetailView: View {
             Section {
                 ForEach(tracks) { track in
                     TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url,
-                             hideArtist: artistMatchesAlbum(track), accent: player.accentColor)
+                             hideArtist: artistMatchesAlbum(track), accent: albumAccent)
                         .contentShape(Rectangle())
                         .onTapGesture { player.play(track: track, context: tracks) }
                         .swipeActions(edge: .trailing) {
                             Button {
                                 player.enqueue(track, context: tracks)
                             } label: { Label("Queue", systemImage: "text.append") }
-                            .tint(player.accentColor)
+                            .tint(albumAccent)
                         }
                         .contextMenu { trackMenu(track) }
                         // No dangling rule above the first or below the last track.
@@ -77,6 +80,10 @@ struct AlbumDetailView: View {
             }
         }
         .listStyle(.plain)
+        // Tint the whole album view (Play button, current-track highlight, swipe
+        // action) with the album's own color rather than the app-wide now-playing
+        // accent. The mini player outside this view keeps the now-playing color.
+        .tint(albumAccent)
         .navigationTitle(album.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -89,6 +96,13 @@ struct AlbumDetailView: View {
         .sheet(isPresented: $editingAlbum) { TagEditView(scope: .album(album)) }
         .sheet(item: $editingTrack) { t in TagEditView(scope: .track(t)) }
         .task(id: library.trackCount) { tracks = await library.tracks(in: album) }
+        .task(id: album.artworkPath) {
+            guard let path = album.artworkPath,
+                  let image = await library.artwork(forPath: path) else {
+                albumAccent = .neutralAccent; return
+            }
+            albumAccent = DominantColor.from(image) ?? .neutralAccent
+        }
     }
 
     // MARK: Menus
@@ -143,8 +157,8 @@ struct TrackRow: View {
     var isCurrent: Bool = false
     /// When true, the artist subtitle is suppressed (album view, same artist).
     var hideArtist: Bool = false
-    /// Accent for the current-track highlight — the app-wide artwork color.
-    var accent: Color = .accentColor
+    /// Accent for the current-track highlight — the album's artwork color.
+    var accent: Color = .neutralAccent
 
     var body: some View {
         HStack(spacing: 12) {
