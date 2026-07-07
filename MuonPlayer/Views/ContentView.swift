@@ -29,17 +29,18 @@ struct ContentView: View {
             }
     }
 
-    // IMPORTANT: the mini-player modifier is applied UNCONDITIONALLY (the
-    // playing-check lives *inside* the accessory/inset content). Wrapping the
-    // whole TabView in `if playing { … } else { … }` changes its structural
-    // identity the first time a track starts, which reset the tab selection and
-    // popped any pushed navigation. Keeping the modifier constant avoids that.
+    // The mini-player is gated on `currentTrack` so there's no empty glass
+    // accessory / inset before anything has played. Tab selection and pushed
+    // navigation live in the external `router` (@Observable), so the TabView
+    // rebuild when the accessory first appears re-reads them and nothing resets.
     @ViewBuilder private var content: some View {
         if #available(iOS 26.0, *) {
-            tabs.tabViewBottomAccessory {
-                if player.currentTrack != nil {
+            if player.currentTrack != nil {
+                tabs.tabViewBottomAccessory {
                     MiniAccessory(onTap: { showNowPlaying = true })
                 }
+            } else {
+                tabs
             }
         } else {
             tabs.safeAreaInset(edge: .bottom) {

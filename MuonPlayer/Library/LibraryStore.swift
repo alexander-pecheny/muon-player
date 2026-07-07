@@ -89,7 +89,9 @@ final class LibraryStore {
         var processed = 0
         scanProgress = (0, total)
 
-        let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount)
+        // Leave one core free so on-demand artwork decodes (.userInitiated) for
+        // visible albums get a cooperative thread and aren't stuck behind the scan.
+        let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount - 1)
         await withTaskGroup(of: (String, TrackMetadata, Double).self) { group in
             var next = 0
             func addTask() {
@@ -263,7 +265,9 @@ final class LibraryStore {
     /// Load embedded artwork for a track path, decoded off the main actor.
     func artwork(forPath path: String) async -> PlatformImage? {
         let url = URL(fileURLWithPath: path)
-        return await Task.detached(priority: .utility) { () -> PlatformImage? in
+        // .userInitiated so on-screen covers decode ahead of the .utility rescan
+        // (readAndUpsert), which otherwise saturates every core with metadata reads.
+        return await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
             let meta = FFmpegMetadata.read(url: url, includeArtwork: true)
             guard let data = meta.artwork else { return nil }
             return PlatformImage(data: data)
