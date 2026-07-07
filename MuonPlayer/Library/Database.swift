@@ -248,6 +248,25 @@ actor Database {
         }
     }
 
+    /// Rewrite stored track paths whose container prefix no longer matches the
+    /// current Documents directory. The data-container UUID changes on every
+    /// (re)install/update, which otherwise makes every absolute path stale —
+    /// defeating the mtime diff (a full re-read each launch) and resetting
+    /// date_added. Only stale rows are touched, so the FTS update trigger fires
+    /// once per container change, not every launch.
+    func normalizeContainerPaths(currentDocuments docs: String) {
+        let sql = """
+        UPDATE tracks
+        SET path = ?1 || substr(path, instr(path, '/Documents/') + 10)
+        WHERE instr(path, '/Documents/') > 0
+          AND substr(path, 1, instr(path, '/Documents/') + 9) <> ?1;
+        """
+        guard let stmt = prepare(sql) else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docs)
+        sqlite3_step(stmt)
+    }
+
     func knownPathsWithMtime() -> [String: Double] {
         var result: [String: Double] = [:]
         guard let stmt = prepare("SELECT path, mtime FROM tracks") else { return result }

@@ -28,6 +28,8 @@ final class LibraryStore {
     }
 
     func loadFromDatabase() async {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.path
+        await database.normalizeContainerPaths(currentDocuments: docs)
         albums = await database.albums()
         trackCount = await database.trackCount()
     }
@@ -89,9 +91,7 @@ final class LibraryStore {
         var processed = 0
         scanProgress = (0, total)
 
-        // Leave one core free so on-demand artwork decodes (.userInitiated) for
-        // visible albums get a cooperative thread and aren't stuck behind the scan.
-        let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount - 1)
+        let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount)
         await withTaskGroup(of: (String, TrackMetadata, Double).self) { group in
             var next = 0
             func addTask() {
@@ -265,12 +265,15 @@ final class LibraryStore {
     /// Load embedded artwork for a track path, decoded off the main actor.
     func artwork(forPath path: String) async -> PlatformImage? {
         let url = URL(fileURLWithPath: path)
-        // .userInitiated so on-screen covers decode ahead of the .utility rescan
-        // (readAndUpsert), which otherwise saturates every core with metadata reads.
-        return await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
-            let meta = FFmpegMetadata.read(url: url, includeArtwork: true)
-            guard let data = meta.artwork else { return nil }
-            return PlatformImage(data: data)
-        }.value
+        // Decode on a GCD queue, not the Swift cooperative pool: a rescan fills the
+        // pool with non-suspending FFmpeg tasks, so a Task.detached here can wait
+        // for a slot and never load while scanning. A .userInitiated GCD thread is
+        // scheduled ahead of the .utility scan, so visible covers still appear.
+        return await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let meta = FFmpegMetadata.read(url: url, includeArtwork: true)
+                cont.resume(returning: meta.artwork.flatMap(PlatformImage.init(data:)))
+            }
+        }
     }
 }
