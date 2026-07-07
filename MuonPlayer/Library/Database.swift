@@ -5,7 +5,9 @@ let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 /// An album grouping (album + album-artist).
 struct Album: Identifiable, Sendable, Hashable {
-    var id: String { "\(artist)\u{1}\(title)" }
+    // Year is part of the identity so distinct releases of the same album (e.g. an
+    // original and a remaster) stay separate rather than collapsing into one.
+    var id: String { "\(artist)\u{1}\(title)\u{1}\(year.map(String.init) ?? "")" }
     let title: String
     let artist: String
     let trackCount: Int
@@ -293,11 +295,11 @@ actor Database {
         SELECT \(effAlbumArtistGroup) AS aa,
                \(effAlbumGroup) AS al,
                COUNT(*) AS cnt,
-               MAX(year),
+               tracks.year,
                MAX(CASE WHEN has_artwork=1 THEN path END)
         FROM tracks
-        GROUP BY aa, al
-        ORDER BY aa COLLATE NOCASE, al COLLATE NOCASE;
+        GROUP BY aa, al, tracks.year
+        ORDER BY aa COLLATE NOCASE, al COLLATE NOCASE, tracks.year;
         """
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
@@ -321,11 +323,11 @@ actor Database {
         SELECT \(effAlbumArtistGroup) AS aa,
                \(effAlbumGroup) AS al,
                COUNT(*) AS cnt,
-               MAX(year),
+               tracks.year,
                MAX(CASE WHEN has_artwork=1 THEN path END),
                MAX(date_added) AS added
         FROM tracks
-        GROUP BY aa, al
+        GROUP BY aa, al, tracks.year
         ORDER BY added DESC
         LIMIT ?;
         """
@@ -350,12 +352,14 @@ actor Database {
         SELECT \(trackColumns) FROM tracks
         WHERE \(effAlbumArtistGroup) = ?
           AND \(effAlbumGroup) = ?
+          AND tracks.year IS ?
         ORDER BY disc_no, \(effTrackNo), \(effTitle) COLLATE NOCASE;
         """
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, album.artist)
         bindText(stmt, 2, album.title)
+        bindInt(stmt, 3, album.year)
         return readTracks(stmt)
     }
 
