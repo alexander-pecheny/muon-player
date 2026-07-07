@@ -73,6 +73,28 @@ struct LibraryTests {
         #expect(await db.search("old").count == 0)
     }
 
+    @Test("Container path normalization rewrites stale prefixes, preserving mtime")
+    func normalizeContainerPaths() async {
+        let db = makeDB()
+        let oldDocs = "/var/mobile/.../Application/AAAA-1111/Documents"
+        let newDocs = "/var/mobile/.../Application/BBBB-2222/Documents"
+        await db.upsertTrack(path: "\(oldDocs)/Artist/Album/01.mp3", meta: meta(title: "One"), hasArtwork: false, mtime: 42)
+        await db.upsertTrack(path: "\(oldDocs)/root.mp3", meta: meta(title: "Root"), hasArtwork: false, mtime: 7)
+
+        await db.normalizeContainerPaths(currentDocuments: newDocs)
+
+        let known = await db.knownPathsWithMtime()
+        #expect(known["\(newDocs)/Artist/Album/01.mp3"] == 42)  // prefix rewritten
+        #expect(known["\(newDocs)/root.mp3"] == 7)              // file directly in Documents
+        #expect(known["\(oldDocs)/Artist/Album/01.mp3"] == nil) // old path gone
+        #expect(known.count == 2)                               // no duplicate rows
+
+        // Idempotent: a second call with the same Documents dir changes nothing.
+        await db.normalizeContainerPaths(currentDocuments: newDocs)
+        #expect(await db.trackCount() == 2)
+        #expect(await db.knownPathsWithMtime()["\(newDocs)/root.mp3"] == 7)
+    }
+
     @Test("Scrobble queue: insert → pending → mark scrobbled")
     func scrobbleQueue() async {
         let db = makeDB()
