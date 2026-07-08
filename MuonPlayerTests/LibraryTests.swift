@@ -95,6 +95,24 @@ struct LibraryTests {
         #expect(await db.knownPathsWithMtime()["\(newDocs)/root.mp3"] == 7)
     }
 
+    @Test("Normalization repairs the /var vs /private/var mismatch")
+    func normalizePrivateVarMismatch() async {
+        // The directory enumerator yields canonical /private/var paths, but stored
+        // rows (and an un-canonicalized Documents dir) can be plain /var. Passing the
+        // canonical dir must rewrite every row to match, or the mtime diff re-reads
+        // the whole library every launch.
+        let db = makeDB()
+        let stored = "/var/mobile/Containers/Data/Application/CCCC-3333/Documents"
+        let canonical = "/private/var/mobile/Containers/Data/Application/CCCC-3333/Documents"
+        await db.upsertTrack(path: "\(stored)/Artist/01.mp3", meta: meta(title: "One"), hasArtwork: false, mtime: 11)
+
+        await db.normalizeContainerPaths(currentDocuments: canonical)
+
+        let known = await db.knownPathsWithMtime()
+        #expect(known["\(canonical)/Artist/01.mp3"] == 11)
+        #expect(known["\(stored)/Artist/01.mp3"] == nil)
+    }
+
     @Test("Scrobble queue: insert → pending → mark scrobbled")
     func scrobbleQueue() async {
         let db = makeDB()
