@@ -59,9 +59,11 @@ enum DominantColor {
 
         let w = weight[best]
         let (h, s, v) = hsb(sumR[best] / w, sumG[best] / w, sumB[best] / w)
-        // Clamp into a range that pops as an accent without being garish or washed out.
+        // Clamp into a range that pops as an accent without being garish or washed
+        // out. The saturation floor is low so muted covers (e.g. kraft-paper tans)
+        // keep their real hue instead of being pushed to a vivid gold.
         return Color(hue: h,
-                     saturation: min(1, max(0.55, s)),
+                     saturation: min(1, max(0.40, s)),
                      brightness: min(0.92, max(0.60, v)))
     }
 
