@@ -6,6 +6,7 @@ struct NowPlayingView: View {
     @Environment(TabRouter.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var showQueue = false
+    @State private var showModePicker = false
     @State private var waveform: [Float] = []
     // Non-nil only while the user is actively dragging the waveform.
     @State private var scrubFraction: Double?
@@ -132,20 +133,17 @@ struct NowPlayingView: View {
         .foregroundStyle(.primary)
     }
 
-    // Playback mode dropdown + queue access.
+    // Playback mode picker + queue access. The mode picker is a bottom action
+    // sheet, not a Menu: a Menu anchored this low opens its tall platter upward
+    // over the artwork and title with inconsistent placement (looks glitchy).
     private var secondaryControls: some View {
         HStack {
-            Menu {
-                Picker("Playback Mode", selection: modeBinding) {
-                    ForEach(PlaybackMode.allCases) { m in
-                        Label(m.label, systemImage: m.systemImage).tag(m)
-                    }
-                }
-            } label: {
+            Button { showModePicker = true } label: {
                 Label(player.mode.label, systemImage: player.mode.systemImage)
                     .font(.subheadline)
                     .foregroundStyle(player.mode == .normal ? Color.secondary : player.accentColor)
             }
+            .buttonStyle(.plain)
             Spacer()
             Button { showQueue = true } label: {
                 Label(player.upNext.isEmpty ? "Queue" : "Queue (\(player.upNext.count))",
@@ -154,10 +152,15 @@ struct NowPlayingView: View {
             }
         }
         .padding(.horizontal, 28)
-    }
-
-    private var modeBinding: Binding<PlaybackMode> {
-        Binding(get: { player.mode }, set: { player.mode = $0 })
+        .confirmationDialog("Playback Mode", isPresented: $showModePicker, titleVisibility: .visible) {
+            ForEach(PlaybackMode.allCases) { m in
+                Button {
+                    player.mode = m
+                } label: {
+                    Text(m == player.mode ? "\(m.label) ✓" : m.label)
+                }
+            }
+        }
     }
 
     // MARK: - Navigation (item #8)

@@ -131,7 +131,7 @@ struct HomeView: View {
                             .swipeActions(edge: .trailing) {
                                 Button {
                                     player.enqueue(track, context: results.songs)
-                                } label: { Label("Queue", systemImage: "text.append") }
+                                } label: { Label("Enqueue", systemImage: "text.append") }
                                 .tint(player.accentColor)
                             }
                     }

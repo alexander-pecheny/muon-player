@@ -50,7 +50,7 @@ struct FoldersView: View {
                             .swipeActions(edge: .trailing) {
                                 Button {
                                     player.enqueue(track, context: trackFiles)
-                                } label: { Label("Queue", systemImage: "text.append") }
+                                } label: { Label("Enqueue", systemImage: "text.append") }
                                 .tint(player.accentColor)
                             }
                             .contextMenu {
