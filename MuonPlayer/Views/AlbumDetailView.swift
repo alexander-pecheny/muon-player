@@ -25,7 +25,7 @@ struct AlbumDetailView: View {
                     VStack(spacing: 2) {
                         Text(album.title).font(.title3.bold()).multilineTextAlignment(.center)
                         Text(album.artist).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        Text("\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")")
+                        Text(trackCountLine)
                             .font(.caption).foregroundStyle(.tertiary)
                         if let fmt = formatSummary {
                             Text(fmt).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
@@ -142,6 +142,12 @@ struct AlbumDetailView: View {
     private func artistMatchesAlbum(_ track: Track) -> Bool {
         guard let a = track.artist else { return true }
         return a.caseInsensitiveCompare(album.artist) == .orderedSame
+    }
+
+    private var trackCountLine: String {
+        let count = "\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")"
+        guard let year = album.year else { return count }
+        return "\(year) · \(count)"
     }
 
     /// Item #5: format + bitrate summary for the album.
