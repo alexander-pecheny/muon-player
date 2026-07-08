@@ -170,6 +170,8 @@ struct TrackRow: View {
                 Text("\(n)")
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .frame(width: 24, alignment: .trailing)
             }
             VStack(alignment: .leading, spacing: 2) {
