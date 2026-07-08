@@ -54,6 +54,9 @@ final class FFmpegDecoder {
     private var flushed = false
     private var targetOutputFrames: Int64?    // exact content length (canonical rate), if known
     private var emittedOutputFrames: Int64 = 0
+    private var primingInputSamples: Int64 = 0   // leading samples FFmpeg won't drop for us
+    private var skipUntilInputSample: Int64 = 0  // absolute input sample output should start at
+    private var inputSampleCursor: Int64 = 0     // absolute input sample of the next decoded frame
 
     enum DecodeError: Error { case open(String), noAudioStream, codec(String), resampler }
 
@@ -99,15 +102,22 @@ final class FFmpegDecoder {
             duration = Double(ctx.pointee.duration) / Double(AV_TIME_BASE)
         }
 
-        // Gapless trimming. FFmpeg applies leading-priming skip for mp3/opus/
-        // vorbis, and for AAC-in-MP4 tagged the ffmpeg way (edit lists) or the
-        // Apple way (iTunSMPB). But for iTunSMPB it leaves the *trailing* padding
-        // in place, which shows up as a gap at the next track. So if the file
-        // declares an exact valid-sample count, cap output to it — this trims
-        // trailing padding and is a no-op for formats already trimmed exactly.
-        if let valid = validSampleCount(fmtMeta: ctx.pointee.metadata, streamMeta: stream.pointee.metadata) {
-            targetOutputFrames = Int64((Double(valid) * CanonicalAudio.sampleRate / Double(inSampleRate)).rounded())
+        // Gapless trimming. FFmpeg drops encoder priming itself for mp3/opus/
+        // vorbis, and for AAC-in-MP4 that carries an edit list. Apple's
+        // `iTunSMPB` tag it ignores entirely, so an edit-list-less m4a decodes
+        // with priming at the head and padding at the tail — audible as a gap
+        // and a click at every album transition.
+        if let g = GaplessInfo.read(ctx.pointee.metadata, stream.pointee.metadata) {
+            duration = Double(g.validSamples) / Double(inSampleRate)
+            targetOutputFrames = rescaleToCanonical(g.validSamples)
+
+            let streamSamples = av_rescale_q(stream.pointee.duration, timeBase,
+                                             AVRational(num: 1, den: inSampleRate))
+            if !g.ffmpegAlreadyTrims(streamDurationInSamples: streamSamples) {
+                primingInputSamples = g.priming
+            }
         }
+        skipUntilInputSample = primingInputSamples
 
         try setupResampler(cctx)
 
@@ -131,16 +141,25 @@ final class FFmpegDecoder {
         swr = swrCtx
     }
 
-    /// Seek to `time` seconds. Flushes decoder + resampler state.
+    private func rescaleToCanonical(_ inputSamples: Int64) -> Int64 {
+        av_rescale_q(inputSamples, AVRational(num: 1, den: inSampleRate),
+                     AVRational(num: 1, den: Int32(CanonicalAudio.sampleRate)))
+    }
+
+    /// Seek to `time` seconds of *content* — i.e. past any encoder priming.
+    /// Flushes decoder + resampler state.
     func seek(to time: TimeInterval) {
         guard let fmtCtx, let codecCtx else { return }
-        let ts = Int64(time / av_q2d(timeBase))
+        let contentSample = Int64((time * Double(inSampleRate)).rounded())
+        skipUntilInputSample = primingInputSamples + contentSample
+        let ts = av_rescale_q(skipUntilInputSample, AVRational(num: 1, den: inSampleRate), timeBase)
         av_seek_frame(fmtCtx, streamIndex, ts, AVSEEK_FLAG_BACKWARD)
         avcodec_flush_buffers(codecCtx)
         if let swr { swr_convert(swr, nil, 0, nil, 0) } // drain
         finished = false
         flushed = false
-        emittedOutputFrames = Int64((time * CanonicalAudio.sampleRate).rounded())
+        inputSampleCursor = 0
+        emittedOutputFrames = rescaleToCanonical(contentSample)
     }
 
     private var reachedTarget: Bool {
@@ -163,6 +182,19 @@ final class FFmpegDecoder {
         return buffer
     }
 
+    /// Number of leading samples of `frame` that fall before `skipUntilInputSample`,
+    /// advancing the absolute input cursor past it.
+    private func consumeSkip(_ frame: UnsafeMutablePointer<AVFrame>) -> Int32 {
+        let count = Int64(frame.pointee.nb_samples)
+        if frame.pointee.pts != Int64.min { // AV_NOPTS_VALUE
+            inputSampleCursor = av_rescale_q(frame.pointee.pts, timeBase,
+                                             AVRational(num: 1, den: inSampleRate))
+        }
+        let drop = min(count, max(0, skipUntilInputSample - inputSampleCursor))
+        inputSampleCursor += count
+        return Int32(drop)
+    }
+
     /// Returns the next chunk of canonical PCM, or nil at end of stream.
     /// Buffers are ~one decoded frame each (resampled).
     func nextBuffer() -> AVAudioPCMBuffer? {
@@ -172,7 +204,7 @@ final class FFmpegDecoder {
             // Try to pull a decoded frame first.
             let recv = avcodec_receive_frame(codecCtx, frame)
             if recv == 0 {
-                let buf = convert(frame: frame, swr: swr)
+                let buf = convert(frame: frame, swr: swr, dropping: consumeSkip(frame))
                 av_frame_unref(frame)
                 if let out = cap(buf) { return out }
                 if reachedTarget { return nil }
@@ -188,7 +220,7 @@ final class FFmpegDecoder {
                 avcodec_send_packet(codecCtx, nil) // enter draining mode
                 let r2 = avcodec_receive_frame(codecCtx, frame)
                 if r2 == 0 {
-                    let buf = convert(frame: frame, swr: swr)
+                    let buf = convert(frame: frame, swr: swr, dropping: consumeSkip(frame))
                     av_frame_unref(frame)
                     if let out = cap(buf) { return out }
                     if reachedTarget { return nil }
@@ -226,23 +258,18 @@ final class FFmpegDecoder {
         return buffer
     }
 
-    /// Parse the exact valid-sample count from the Apple `iTunSMPB` gapless tag
-    /// if present. Field layout (space-separated hex):
-    /// `<reserved> <priming> <padding> <valid-samples> ...`.
-    private func validSampleCount(fmtMeta: OpaquePointer?, streamMeta: OpaquePointer?) -> Int64? {
-        func tag(_ dict: OpaquePointer?) -> String? {
-            guard let e = av_dict_get(dict, "iTunSMPB", nil, AV_DICT_IGNORE_SUFFIX), let v = e.pointee.value
-            else { return nil }
-            return String(cString: v)
-        }
-        guard let smpb = tag(fmtMeta) ?? tag(streamMeta) else { return nil }
-        let fields = smpb.split(whereSeparator: { $0 == " " }).map(String.init)
-        guard fields.count >= 4, let valid = Int64(fields[3], radix: 16), valid > 0 else { return nil }
-        return valid
+    /// Byte offset into each input plane for `samples`, honouring planar vs packed.
+    private func planeOffset(_ samples: Int32, codecCtx: UnsafeMutablePointer<AVCodecContext>) -> Int {
+        let bytes = Int(av_get_bytes_per_sample(codecCtx.pointee.sample_fmt))
+        let stride = av_sample_fmt_is_planar(codecCtx.pointee.sample_fmt) == 1
+            ? bytes : bytes * Int(codecCtx.pointee.ch_layout.nb_channels)
+        return Int(samples) * stride
     }
 
-    private func convert(frame: UnsafeMutablePointer<AVFrame>, swr: OpaquePointer) -> AVAudioPCMBuffer? {
-        let inSamples = frame.pointee.nb_samples
+    private func convert(frame: UnsafeMutablePointer<AVFrame>, swr: OpaquePointer,
+                         dropping skip: Int32) -> AVAudioPCMBuffer? {
+        guard let codecCtx else { return nil }
+        let inSamples = frame.pointee.nb_samples - skip
         guard inSamples > 0 else { return nil }
 
         let delay = swr_get_delay(swr, Int64(inSampleRate))
@@ -253,11 +280,18 @@ final class FFmpegDecoder {
               let buffer = AVAudioPCMBuffer(pcmFormat: CanonicalAudio.format,
                                             frameCapacity: AVAudioFrameCount(outCount)) else { return nil }
 
-        var outPlanes = outPlanePointers(buffer)
-        let inData = UnsafeRawPointer(frame.pointee.extended_data)?
+        let offset = planeOffset(skip, codecCtx: codecCtx)
+        let planes = UnsafeRawPointer(frame.pointee.extended_data)!
             .assumingMemoryBound(to: UnsafePointer<UInt8>?.self)
+        let planeCount = av_sample_fmt_is_planar(codecCtx.pointee.sample_fmt) == 1
+            ? Int(codecCtx.pointee.ch_layout.nb_channels) : 1
+        var inData: [UnsafePointer<UInt8>?] = (0..<planeCount).map { planes[$0].map { $0 + offset } }
+
+        var outPlanes = outPlanePointers(buffer)
         let written = outPlanes.withUnsafeMutableBufferPointer { out in
-            swr_convert(swr, out.baseAddress, Int32(outCount), inData, inSamples)
+            inData.withUnsafeMutableBufferPointer { inp in
+                swr_convert(swr, out.baseAddress, Int32(outCount), inp.baseAddress, inSamples)
+            }
         }
         guard written >= 0 else { return nil }
         buffer.frameLength = AVAudioFrameCount(written)
