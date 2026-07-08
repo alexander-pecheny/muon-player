@@ -28,7 +28,14 @@ final class LibraryStore {
     }
 
     func loadFromDatabase() async {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.path
+        // Use the *canonical* Documents path so `docs` matches the `/private/var/…`
+        // form the directory enumerator stores. `resolvingSymlinksInPath()` does NOT
+        // add `/private` on iOS, so it left `docs` as `/var/…`; that mismatch made
+        // every stored row look stale, rewriting all paths to the broken `/var/…`
+        // form each launch and forcing a full rescan on every restart.
+        let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let docs = (try? docsURL.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath)
+            ?? docsURL.resolvingSymlinksInPath().path
         await database.normalizeContainerPaths(currentDocuments: docs)
         albums = await database.albums()
         trackCount = await database.trackCount()

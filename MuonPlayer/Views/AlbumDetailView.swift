@@ -45,7 +45,7 @@ struct AlbumDetailView: View {
                         Button {
                             for t in tracks { player.enqueue(t, context: tracks) }
                         } label: {
-                            Label("Queue", systemImage: "text.append")
+                            Label("Enqueue", systemImage: "text.append")
                                 .labelStyle(.titleAndIcon)
                                 .frame(maxWidth: .infinity)
                         }
@@ -69,7 +69,7 @@ struct AlbumDetailView: View {
                         .swipeActions(edge: .trailing) {
                             Button {
                                 player.enqueue(track, context: tracks)
-                            } label: { Label("Queue", systemImage: "text.append") }
+                            } label: { Label("Enqueue", systemImage: "text.append") }
                             .tint(albumAccent)
                         }
                         .contextMenu { trackMenu(track) }
@@ -91,6 +91,10 @@ struct AlbumDetailView: View {
                 Menu {
                     albumMenu
                 } label: { Image(systemName: "ellipsis.circle") }
+                // The toolbar lives in the nav bar, outside the List's `.tint`, so
+                // it otherwise inherits the app-wide now-playing accent. Pin it to
+                // this album's own color to match the rest of the view.
+                .tint(albumAccent)
             }
         }
         .sheet(isPresented: $editingAlbum) { TagEditView(scope: .album(album)) }
