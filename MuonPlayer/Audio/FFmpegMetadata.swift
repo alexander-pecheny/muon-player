@@ -52,6 +52,12 @@ enum FFmpegMetadata {
                 if let name = avcodec_get_name(params.pointee.codec_id) {
                     meta.codec = String(cString: name)
                 }
+                // Container duration spans encoder priming + padding; iTunSMPB
+                // declares the real content length.
+                if let g = GaplessInfo.read(ctx.pointee.metadata, stream.pointee.metadata),
+                   params.pointee.sample_rate > 0 {
+                    meta.duration = Double(g.validSamples) / Double(params.pointee.sample_rate)
+                }
                 let streamBitrate = params.pointee.bit_rate
                 if streamBitrate > 0 {
                     meta.bitrate = Int(streamBitrate)
