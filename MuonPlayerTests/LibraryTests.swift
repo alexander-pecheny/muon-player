@@ -131,3 +131,79 @@ struct LibraryTests {
         #expect(await db.pendingScrobbleCount() == 0)
     }
 }
+
+/// "Repeat Artist" walks an artist's discography in release order, independent of
+/// how the files are laid out on disk.
+@Suite("Repeat Artist ordering")
+struct AlbumArtistOrderTests {
+
+    private func track(_ file: String, album: String, year: Int?, no: Int, disc: Int? = nil) -> Track {
+        Track(url: URL(fileURLWithPath: "/m/Lumen/\(file).mp3"),
+              artist: "Lumen", album: album, albumArtist: "Lumen",
+              trackNo: no, discNo: disc, year: year)
+    }
+
+    @Test("Flat folder: albums play in year order, tracks stay in album order")
+    func flatFolderFollowsReleaseYear() {
+        // Every file in one folder — the layout that used to interleave albums by
+        // track number, so track 10 of one album was followed by track 11 of another.
+        let tracks = [
+            track("10 Lumen - Назови мне своё имя", album: "Правда?", year: 2005, no: 10),
+            track("11 Lumen - Никто не знает", album: "Правда?", year: 2005, no: 11),
+            track("11 Lumen - Катёнки", album: "Три пути", year: 2007, no: 11),
+            track("01 Lumen - Сид и Нэнси", album: "Три пути", year: 2007, no: 1),
+            track("01 Lumen - Гореть", album: "Правда?", year: 2005, no: 1),
+        ]
+
+        let ordered = LibraryStore.orderByAlbum(tracks).map(\.title)
+        #expect(ordered == [
+            "01 Lumen - Гореть",
+            "10 Lumen - Назови мне своё имя",
+            "11 Lumen - Никто не знает",
+            "01 Lumen - Сид и Нэнси",
+            "11 Lumen - Катёнки",
+        ])
+    }
+
+    @Test("Same year: albums ordered by title, discs before tracks")
+    func sameYearAndMultiDisc() {
+        let tracks = [
+            track("b2", album: "B", year: 2010, no: 2, disc: 1),
+            track("b1", album: "B", year: 2010, no: 1, disc: 2),
+            track("a1", album: "A", year: 2010, no: 1),
+        ]
+        #expect(LibraryStore.orderByAlbum(tracks).map(\.title) == ["a1", "b2", "b1"])
+    }
+
+    @Test("Same title, different years: distinct albums stay separate blocks")
+    func sameTitleDifferentYears() {
+        // e.g. an album and its later re-recording. The DB keys albums as
+        // artist+title+year, so these are two albums and must not interleave.
+        let tracks = [
+            track("orig2", album: "Правда?", year: 2005, no: 2),
+            track("redo1", album: "Правда?", year: 2015, no: 1),
+            track("orig1", album: "Правда?", year: 2005, no: 1),
+            track("redo2", album: "Правда?", year: 2015, no: 2),
+        ]
+        #expect(LibraryStore.orderByAlbum(tracks).map(\.title) == ["orig1", "orig2", "redo1", "redo2"])
+    }
+
+    @Test("A track with a missing year stays with its album")
+    func partiallyTaggedAlbumStaysTogether() {
+        let tracks = [
+            track("early1", album: "Early", year: 2000, no: 1),
+            track("late1", album: "Late", year: 2020, no: 1),
+            track("late2", album: "Late", year: nil, no: 2),
+        ]
+        #expect(LibraryStore.orderByAlbum(tracks).map(\.title) == ["early1", "late1", "late2"])
+    }
+
+    @Test("Albums without a year tag sort last")
+    func untaggedYearSortsLast() {
+        let tracks = [
+            track("untagged", album: "Bootleg", year: nil, no: 1),
+            track("late", album: "Late", year: 2020, no: 1),
+        ]
+        #expect(LibraryStore.orderByAlbum(tracks).map(\.title) == ["late", "untagged"])
+    }
+}

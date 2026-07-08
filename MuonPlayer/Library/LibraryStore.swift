@@ -167,19 +167,19 @@ final class LibraryStore {
         return SearchResults(artists: artists, albums: matchedAlbums, songs: songs)
     }
 
-    /// All tracks under an artist's top-level folder, ordered by album subfolder
-    /// then disc/track (used by the "Repeat Top Folder" playhead).
+    /// All tracks under an artist's top-level folder, ordered by album release year
+    /// then disc/track (used by the "Repeat Top Folder" playhead and shuffle).
     func artistFolderTracks(for track: Track) async -> [Track] {
         guard let folder = topFolder(for: track) else { return [] }
         let tracks = await database.tracks(underRelativeTopFolder: folder)
-        return orderByFolder(tracks)
+        return Self.orderByAlbum(tracks)
     }
 
     /// All tracks whose (effective) album-artist matches `track`'s, ordered by
-    /// album subfolder then disc/track (used by the "Repeat Artist" playhead).
+    /// album release year then disc/track (used by the "Repeat Artist" playhead).
     func albumArtistTracks(for track: Track) async -> [Track] {
         let tracks = await database.tracks(byAlbumArtist: track.effectiveAlbumArtist)
-        return orderByFolder(tracks)
+        return Self.orderByAlbum(tracks)
     }
 
     /// The first folder component of `track` under the app's Documents dir (its
@@ -193,13 +193,31 @@ final class LibraryStore {
         return comps.count >= 2 ? String(comps[0]) : nil
     }
 
-    /// Order tracks by their album subfolder name, then disc/track/filename, so
-    /// the playhead walks albums in folder order and tracks in play order.
-    private func orderByFolder(_ tracks: [Track]) -> [Track] {
-        tracks.sorted { a, b in
-            let da = a.url.deletingLastPathComponent().path
-            let db = b.url.deletingLastPathComponent().path
-            if da != db { return da.localizedStandardCompare(db) == .orderedAscending }
+    /// Order tracks chronologically by album (year, then title), then disc/track,
+    /// ignoring where the files live — an artist's discography plays in release
+    /// order even when every album sits in one flat folder. Albums with no year
+    /// tag anywhere sort last.
+    ///
+    /// A title is ranked by the *earliest* year on any of its tracks, but tracks
+    /// within it are then split by their own year. So an untagged track stays with
+    /// its album (nothing else shares the title), while two distinct same-titled
+    /// albums — the DB keys albums as artist+title+year — stay separate blocks in
+    /// release order rather than interleaving by track number.
+    nonisolated static func orderByAlbum(_ tracks: [Track]) -> [Track] {
+        var titleYear: [String: Int] = [:]
+        for t in tracks {
+            guard let y = t.year else { continue }
+            titleYear[t.displayAlbum] = min(titleYear[t.displayAlbum] ?? y, y)
+        }
+        return tracks.sorted { a, b in
+            let ya = titleYear[a.displayAlbum] ?? Int.max
+            let yb = titleYear[b.displayAlbum] ?? Int.max
+            if ya != yb { return ya < yb }
+            if a.displayAlbum != b.displayAlbum {
+                return a.displayAlbum.localizedStandardCompare(b.displayAlbum) == .orderedAscending
+            }
+            let tya = a.year ?? Int.max, tyb = b.year ?? Int.max
+            if tya != tyb { return tya < tyb }
             let dna = a.discNo ?? 0, dnb = b.discNo ?? 0
             if dna != dnb { return dna < dnb }
             let tna = a.trackNo ?? Int.max, tnb = b.trackNo ?? Int.max
