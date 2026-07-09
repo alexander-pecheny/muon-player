@@ -21,13 +21,20 @@ export const RANGES = [
   ["driverFrac", "Driver size",   0.3,  1.3, 0.01, 0.78, 2],
   ["gap",        "Driver gap",    -40,  140, 1,     6,   0],
   ["artScale",   "Overall size",  0.3,  1.6, 0.01, 1.25, 2],
+  ["gradMid",    "Gradient midpoint", 0.05, 0.95, 0.01, 0.55, 2],
+  ["gradReach",  "Gradient reach",  0.3,  1.6, 0.01, 1.0,  2],
+  ["grain",      "Grain",           0,      1, 0.01, 0.48, 2],
+  ["grainSize",  "Grain size",    0.5,     24, 0.02, 1.82, 2],
 ];
 
+// Set inner == mid == outer for a flat tint; set `grain` to 0 for no texture.
 export const COLORS = [
-  ["tint",  "Tint",        "#e0e34e"],
-  ["bg",    "Background",  "#000000"],
-  ["frame", "Driver ring", "#000000"],
-  ["cap",   "Dust cap",    "#000000"],
+  ["inner", "Gradient inner", "#ffc23b"],
+  ["mid",   "Gradient mid",   "#d61f8a"],
+  ["outer", "Gradient outer", "#5b21b6"],
+  ["bg",    "Background",     "#000000"],
+  ["frame", "Driver ring",    "#000000"],
+  ["cap",   "Dust cap",       "#000000"],
 ];
 
 export const DEFAULTS = Object.fromEntries([
@@ -91,8 +98,10 @@ export function buildSVG(params, { fixedSize = true } = {}) {
     return `C ${f(c1[0])} ${f(c1[1])} ${f(c2[0])} ${f(c2[1])} ${f(pb[0])} ${f(pb[1])}`;
   };
 
+  const paint = "url(#muon-paint)";
+
   const letter = (d) =>
-    `<path d="${d}" fill="none" stroke="${p.tint}" stroke-width="${p.stroke}" ` +
+    `<path d="${d}" fill="none" stroke="${paint}" stroke-width="${p.stroke}" ` +
     `stroke-linecap="round" stroke-linejoin="round"/>`;
 
   // One continuous path: up stroke a, over/under the hump, down stroke b — so the
@@ -105,12 +114,35 @@ export function buildSVG(params, { fixedSize = true } = {}) {
                   `${hump(a, b, where)} ${arc(b, ...down)}`);
   };
 
-  const driver = (dx, r) => {
-    const s = r / 510, tx = dx - s * 512, ty = cy - s * 512;
-    return `<g transform="translate(${f(tx)} ${f(ty)}) scale(${s.toFixed(4)})">` +
-      `<circle cx="512" cy="512" r="510" fill="${p.frame}"/>` +
-      `<circle cx="512" cy="512" r="432" fill="${p.tint}"/>` +
-      `<circle cx="512" cy="512" r="150" fill="${p.cap}"/></g>`;
+  // Drawn in the parent's user space, not a nested scaled one, so the gradient's
+  // userSpaceOnUse coordinates still mean what they say.
+  const driver = (dx, r) =>
+    `<circle cx="${f(dx)}" cy="${f(cy)}" r="${f(r)}" fill="${p.frame}"/>` +
+    `<circle cx="${f(dx)}" cy="${f(cy)}" r="${f(r * 432 / 510)}" fill="${paint}"/>` +
+    `<circle cx="${f(dx)}" cy="${f(cy)}" r="${f(r * 150 / 510)}" fill="${p.cap}"/>`;
+
+  // The gradient radiates from the driver; the grain is dark speckle knocked out
+  // of whatever it is applied to, so the background shows through the holes.
+  // grainSize is a speckle width in viewBox units, hence the reciprocal:
+  // feTurbulence takes a frequency, where bigger means finer.
+  const defs = (dx, reach) => {
+    const grainMatrix = `0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  ` +
+      `${(p.grain / 3).toFixed(4)} ${(p.grain / 3).toFixed(4)} ${(p.grain / 3).toFixed(4)} 0 0`;
+    return `<defs>` +
+      `<radialGradient id="muon-paint" gradientUnits="userSpaceOnUse" ` +
+      `cx="${f(dx)}" cy="${f(cy)}" r="${f(reach)}">` +
+      `<stop offset="0" stop-color="${p.inner}"/>` +
+      `<stop offset="${p.gradMid}" stop-color="${p.mid}"/>` +
+      `<stop offset="1" stop-color="${p.outer}"/>` +
+      `</radialGradient>` +
+      `<filter id="muon-grain" x="-5%" y="-5%" width="110%" height="110%" ` +
+      `color-interpolation-filters="sRGB">` +
+      `<feTurbulence type="fractalNoise" baseFrequency="${(1 / p.grainSize).toFixed(4)}" ` +
+      `numOctaves="1" seed="7" result="noise"/>` +
+      `<feColorMatrix in="noise" type="matrix" values="${grainMatrix}" result="speck"/>` +
+      `<feComposite in="speck" in2="SourceGraphic" operator="in" result="clipped"/>` +
+      `<feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="clipped"/></feMerge>` +
+      `</filter></defs>`;
   };
 
   const left = [0, 1, 2, 3].map((i) => -(offset + i * p.step));
@@ -127,9 +159,12 @@ export function buildSVG(params, { fixedSize = true } = {}) {
     join(Rt[0], Rt[1], "top") +              // 'n'
     driver(dx, frameR);                      // 'o'
 
+  const reach = p.gradReach * (Math.abs(Math.min(...left)) + p.stroke / 2);
+  const filter = p.grain > 0 ? ` filter="url(#muon-grain)"` : "";
   const rect = p.transparent ? "" : `<rect width="${SIZE}" height="${SIZE}" fill="${p.bg}"/>`;
   const size = fixedSize ? `width="${SIZE}" height="${SIZE}"` : `width="100%" height="100%"`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" ${size}>${rect}` +
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" ${size}>` +
+    `${defs(dx, reach)}${rect}` +
     `<g transform="translate(${cy} ${cy}) scale(${p.artScale}) translate(${-cy} ${-cy})">` +
-    `${art}</g></svg>`;
+    `<g${filter}>${art}</g></g></svg>`;
 }

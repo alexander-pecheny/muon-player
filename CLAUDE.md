@@ -187,4 +187,12 @@ new defaults.
 
 The icon: a schematic front-on speaker driver flanked by radiating waves that
 flare outwards (the `cone` knob; 0 makes them parallel `)))`). The arcs also
-spell "muon" (m + u, the driver as o, n).
+spell "muon" (m + u, the driver as o, n). They are painted with a radial
+gradient centred on the driver plus `feTurbulence` grain — set the three stops
+equal and `grain` to 0 for a flat tint.
+
+Two traps in there. `grainSize` is a speckle width, so it is fed to
+`feTurbulence` as `1/grainSize` (that filter wants a frequency, where bigger
+means finer). And every `<defs>` id is `muon-`prefixed: the lab turns each
+`RANGES`/`COLORS` key into an element id, and a `url(#grain)` clashing with
+`<input id="grain">` silently resolves to the input, killing the filter.
