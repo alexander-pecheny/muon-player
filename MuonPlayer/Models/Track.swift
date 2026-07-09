@@ -133,6 +133,8 @@ struct Track: Identifiable, Sendable, Hashable {
         case "wmav1", "wmav2": return "WMA"
         case "ac3": return "AC-3"
         case "eac3": return "E-AC-3"
+        case "wavpack": return "WavPack"
+        case "ape": return "APE"
         case "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_s16be", "pcm_f32be": return "PCM"
         default: return codec.uppercased()
         }

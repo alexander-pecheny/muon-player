@@ -56,4 +56,16 @@ struct TrackTests {
         let name = Track.displayName(from: url)
         #expect(name == "song.name")
     }
+
+    @Test("Codec labels are human-readable", arguments: [
+        ("wavpack", "WavPack"),
+        ("ape", "APE"),
+        ("flac", "FLAC"),
+        ("mp3float", "MP3"),
+        ("alac", "ALAC"),
+    ])
+    func codecLabels(codec: String, expected: String) {
+        let track = Track(url: URL(fileURLWithPath: "/Music/x.\(codec)"), codec: codec)
+        #expect(track.formatLabel == expected)
+    }
 }

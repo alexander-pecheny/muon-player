@@ -52,9 +52,11 @@ struct TagEdits: Sendable {
 }
 
 /// The current metadata-reading logic version. Bump to force a full re-read of
-/// every file on next launch (used to repair libraries scanned by a buggy
-/// reader — e.g. the AV_DICT_IGNORE_SUFFIX album/album_artist collision).
-let kScannerVersion: Int32 = 5
+/// every file on next launch — after a fix to the reader itself (the
+/// AV_DICT_IGNORE_SUFFIX album/album_artist collision, the CP1251 tag repair) or
+/// after FFmpeg gains a codec, since files it previously could not demux were
+/// indexed with no duration, bitrate or tags (wavpack and APE, at v6).
+let kScannerVersion: Int32 = 6
 
 /// A pending or completed scrobble row.
 struct ScrobbleRow: Sendable {
