@@ -24,6 +24,7 @@ struct MacRootView: View {
             }
         }
         .tint(player.accentColor)
+        .spaceTogglesPlayback(player)
         .safeAreaInset(edge: .bottom, spacing: 0) { MacPlayerBar() }
         .inspector(isPresented: $router.showNowPlaying) {
             MacNowPlayingView()

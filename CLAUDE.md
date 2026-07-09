@@ -142,8 +142,13 @@ xcrun devicectl device install app --device "$(xcrun devicectl list devices | gr
 
 ## App icon
 
-Single 1024×1024 PNG at `MuonPlayer/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
-(`ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`). It is generated:
+Both apps share `MuonPlayer/Assets.xcassets/AppIcon.appiconset`
+(`ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`). iOS uses the single
+`AppIcon-1024.png`; macOS needs the classic ten-slice `mac` idiom set
+(`AppIcon-mac-*.png`), downsampled from that same 1024 art with `sips`. Without
+those slices the Mac app silently builds with **no icon at all**.
+
+The 1024 master is generated:
 
 ```bash
 cd design/icon
@@ -151,6 +156,9 @@ python3 gen_icon.py                         # tunables at top; writes icon.svg
 rsvg-convert -w 1024 -h 1024 icon.svg -o /tmp/raw.png   # brew install librsvg
 python3 -c "from PIL import Image; Image.open('/tmp/raw.png').convert('RGB').save('/tmp/AppIcon-1024.png')"  # strip alpha (iOS requires opaque)
 cp /tmp/AppIcon-1024.png ../../MuonPlayer/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+
+# then regenerate the macOS slices from it
+python3 scripts/gen-mac-icon.py
 ```
 
 The icon: a schematic front-on speaker driver flanked by radiating waves shaped

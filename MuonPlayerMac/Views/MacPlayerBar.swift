@@ -67,9 +67,6 @@ struct MacPlayerBar: View {
     private var transport: some View {
         HStack(spacing: 4) {
             Button { player.previous() } label: { Image(systemName: "backward.fill") }
-            // No Space shortcut: a bare key equivalent is consumed before the
-            // focused text field sees it, so it would break typing in the search
-            // and filter fields. Play/Pause is ⌘P, from the Playback menu.
             Button { player.togglePlayPause() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 17))

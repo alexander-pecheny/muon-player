@@ -42,7 +42,9 @@ enum MacSelfTest {
         let time = player.currentTime
         let waveform = await WaveformStore.shared.waveform(for: first.url, duration: first.duration ?? 0)
         let folderScoped = await library.artistFolderTracks(for: first)
-        player.stop()
+        // MUON_MACTEST_KEEP leaves a track loaded and playing, so the UI (and the
+        // Space key monitor) can be driven afterwards.
+        if ProcessInfo.processInfo.environment["MUON_MACTEST_KEEP"] == nil { player.stop() }
 
         let text = """
         folder=\(folder.path)
@@ -57,5 +59,24 @@ enum MacSelfTest {
         """
         try? text.write(to: report, atomically: true, encoding: .utf8)
         NSLog("MACTEST:\n\(text)")
+
+        if keepPlaying { logPlaybackState(player: player, to: support) }
+    }
+
+    private static var keepPlaying: Bool {
+        ProcessInfo.processInfo.environment["MUON_MACTEST_KEEP"] != nil
+    }
+
+    /// Continuously mirror `isPlaying` into a file so a UI test driving the
+    /// keyboard can observe what the player actually did.
+    private static func logPlaybackState(player: Player, to dir: URL) {
+        let state = dir.appendingPathComponent("playstate.txt")
+        Task { @MainActor in
+            while true {
+                let line = player.isPlaying ? "playing" : "paused"
+                try? line.write(to: state, atomically: true, encoding: .utf8)
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
     }
 }

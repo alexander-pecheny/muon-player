@@ -50,9 +50,8 @@ struct MuonPlayerMacApp: App {
 }
 
 /// Playback and library commands, mirrored into the menu bar so every action has
-/// a keyboard shortcut. Play/Pause is ⌘P rather than Space: a bare Space key
-/// equivalent is consumed before the focused text field sees it, which would
-/// break typing in the search and filter fields.
+/// a keyboard shortcut. Space also toggles play/pause, but through a key monitor
+/// rather than a menu shortcut — see SpaceTogglesPlayback.
 struct MuonCommands: Commands {
     let player: Player
     let library: LibraryStore
