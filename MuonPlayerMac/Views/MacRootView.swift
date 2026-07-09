@@ -57,12 +57,35 @@ struct MacRootView: View {
                     }
                 }
             }
-            scanStatus
+            ScanStatusView()
         }
         .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 260)
     }
 
-    @ViewBuilder private var scanStatus: some View {
+    @ViewBuilder private func section(_ s: MacRouter.Section) -> some View {
+        switch s {
+        case .home: MacHomeView()
+        case .albums: MacAlbumsView()
+        case .artists: MacArtistsView()
+        case .songs: MacSongsView()
+        case .folders: MacFoldersView()
+        case .history: MacHistoryView()
+        }
+    }
+}
+
+/// Scan progress, in its own view so that reading `scanPhase` invalidates only
+/// this strip.
+///
+/// Reading it directly in `MacRootView.body` made every progress tick rebuild the
+/// whole body — the split view and its thousand-cell album grid. The scan loop
+/// awaits the database actor once per file, which hands the main actor back to
+/// SwiftUI each time, so that rebuild ran once per file and a full re-index of a
+/// 14k-track library took minutes instead of seconds.
+private struct ScanStatusView: View {
+    @Environment(LibraryStore.self) private var library
+
+    var body: some View {
         if library.scanPhase != .idle {
             VStack(alignment: .leading, spacing: 5) {
                 Divider()
@@ -79,18 +102,6 @@ struct MacRootView: View {
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 10)
-            .transition(.opacity)
-        }
-    }
-
-    @ViewBuilder private func section(_ s: MacRouter.Section) -> some View {
-        switch s {
-        case .home: MacHomeView()
-        case .albums: MacAlbumsView()
-        case .artists: MacArtistsView()
-        case .songs: MacSongsView()
-        case .folders: MacFoldersView()
-        case .history: MacHistoryView()
         }
     }
 }

@@ -141,15 +141,14 @@ final class LibraryStore {
 
     /// Read metadata for the given files concurrently and upsert the results.
     ///
-    /// Reading a file's tags takes ~2ms; what used to dominate a large scan was
-    /// everything the consumer did *per file*. Two things fix that:
+    /// Reading one file's tags costs ~2ms, so a 14k-track library should index in
+    /// seconds. What made it take minutes was per-file work in *this* loop: each
+    /// `await` on the database actor handed the main actor back to SwiftUI, which
+    /// then re-rendered whatever the freshly-published progress had invalidated.
     ///
-    /// - Results are upserted in batches inside one transaction, instead of one
-    ///   autocommit (and one `prepare`) per row.
-    /// - Progress is published a few times a second rather than once per file.
-    ///   Every publish invalidates `@Observable` state and re-renders the album
-    ///   grid; doing that 14k times pinned the main thread and starved the UI —
-    ///   the scan indicator itself never got a chance to draw.
+    /// Batching the upserts removes almost all of those hand-offs, and throttling
+    /// progress bounds how often the UI can redraw. The third leg is on the view
+    /// side — see ScanStatusView, which keeps the invalidation off the root view.
     private func readAndUpsert(_ items: [(path: String, url: URL, mtime: Double)]) async {
         let total = items.count
         var processed = 0
