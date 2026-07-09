@@ -140,6 +140,26 @@ APP=$(find ~/Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/Deb
 xcrun devicectl device install app --device "$(xcrun devicectl list devices | grep -i 'iphone' | grep connected | awk '{print $3}')" "$APP"
 ```
 
+## Library maintenance
+
+`scripts/muon-dedup.swift` removes redundant copies of an album, keeping the
+best-quality one. It reads the Mac app's SQLite library (no FFmpeg needed) and
+treats two folders as the same album only when the tags agree, the track counts
+agree, and every duration matches **to within one sample** — a remaster or a
+different edit differs by tens of milliseconds, which is why that rule is safe to
+automate.
+
+```bash
+swift scripts/muon-dedup.swift                     # dry run (default)
+swift scripts/muon-dedup.swift --apply --rescue-art
+python3 scripts/test-muon-dedup.py                 # synthetic correctness suite
+```
+
+Multi-disc releases collapse to the album folder (discs are kept or dropped
+together); two sibling rips do not, since they are what we compare. Deletions go
+to the Trash, and `--rescue-art` copies any cover the survivor lacks before the
+loser is removed.
+
 ## App icon
 
 Both apps share `MuonPlayer/Assets.xcassets/AppIcon.appiconset`
