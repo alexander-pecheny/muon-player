@@ -31,6 +31,9 @@
 
 import Foundation
 
+// Progress must be visible when stdout is a file, not a terminal.
+setvbuf(stdout, nil, _IONBF, 0)
+
 // MARK: - Options
 
 struct Options {
@@ -43,6 +46,8 @@ struct Options {
     var verbose = false
     var refreshIndex = false
     var indexPath = NSTemporaryDirectory() + "muon-cloud-index.json"
+    var manifestPath = NSTemporaryDirectory() + "muon-cloud-manifest.tsv"
+    var logPath = ""
     /// Anything above this is halved within its own family.
     var maxSampleRate = 48_000
 }
@@ -61,6 +66,8 @@ func parseOptions() -> Options {
         case "--root": o.root = it.next() ?? o.root
         case "--remote": o.remote = it.next() ?? o.remote
         case "--index": o.indexPath = it.next() ?? o.indexPath
+        case "--manifest": o.manifestPath = it.next() ?? o.manifestPath
+        case "--log": o.logPath = it.next() ?? o.logPath
         case "--jobs": o.jobs = Int(it.next() ?? "") ?? o.jobs
         case "--max-sample-rate": o.maxSampleRate = Int(it.next() ?? "") ?? o.maxSampleRate
         case "--help", "-h":
@@ -75,6 +82,8 @@ func parseOptions() -> Options {
               --remote REMOTE:PATH  rclone destination (default pcloud:Music)
               --refresh-index       re-list the remote instead of using the cache
               --index PATH          where the remote listing is cached
+              --manifest PATH       write the upload list (size-sorted) here
+              --log PATH            rclone transfer log (per-file, with progress)
               --jobs N              parallel re-encodes (default 8)
               --max-sample-rate N   rates above this are halved (default 48000)
               --verbose             list every file
@@ -148,6 +157,16 @@ struct FlacInfo {
 
     var duration: Double { sampleRate > 0 ? Double(totalSamples) / Double(sampleRate) : 0 }
     var needsResample: Bool { bitsPerSample != 16 || sampleRate > 48_000 }
+
+    /// FLAC rarely compresses below ~50% of the raw PCM it declares. A file a
+    /// twentieth of that size is truncated — a broken download whose header still
+    /// promises the full stream. Uploading it, or feeding it to ffmpeg, is worse
+    /// than skipping it.
+    func looksTruncated(fileSize: Int64) -> Bool {
+        let rawBytes = totalSamples * Int64(channels) * Int64(bitsPerSample / 8)
+        guard rawBytes > 0 else { return false }
+        return Double(fileSize) < Double(rawBytes) * 0.05
+    }
 }
 
 /// 96k → 48k, 88.2k → 44.1k: stay in the file's own sample-rate family so the
@@ -264,7 +283,16 @@ if let e = FileManager.default.enumerator(at: rootURL, includingPropertiesForKey
     }
 }
 locals.sort { $0.relative < $1.relative }
+
+let truncated = locals.filter { $0.info.looksTruncated(fileSize: $0.size) }
+locals.removeAll { $0.info.looksTruncated(fileSize: $0.size) }
 print("local FLACs: \(locals.count)")
+if !truncated.isEmpty {
+    print("\nskipping \(truncated.count) truncated file(s) — header promises audio the file does not contain:")
+    for t in truncated {
+        print(String(format: "  %@ (%lld bytes, header claims %.0fs)", t.relative, t.size, t.info.duration))
+    }
+}
 
 // --- remote index
 let remoteFiles = loadRemoteIndex(o)
@@ -291,11 +319,31 @@ func findRemote(_ f: LocalFlac) -> String? {
 }
 
 print("resolving what is already on the remote …")
+// A cheap name+size hit needs no network; only ambiguous names do, so resolve
+// them concurrently rather than paying ~2.5s of rclone round-trip each in turn.
+var resolved = [String?](repeating: nil, count: locals.count)
+let resolveQueue = OperationQueue()
+resolveQueue.maxConcurrentOperationCount = max(4, o.jobs)
+let resolveLock = NSLock()
+var resolvedCount = 0
+for (i, f) in locals.enumerated() {
+    guard o.upload || (o.resample && f.info.needsResample) else { continue }
+    resolveQueue.addOperation {
+        let r = findRemote(f)
+        resolveLock.lock()
+        resolved[i] = r
+        resolvedCount += 1
+        if resolvedCount % 500 == 0 { print("  … \(resolvedCount)/\(locals.count)") }
+        resolveLock.unlock()
+    }
+}
+resolveQueue.waitUntilAllOperationsAreFinished()
+
 var plans: [(LocalFlac, Plan)] = []
-for f in locals {
+for (i, f) in locals.enumerated() {
     let needs = o.resample && f.info.needsResample
     let rate = targetRate(for: f.info.sampleRate, max: o.maxSampleRate)
-    let existing = o.upload || needs ? findRemote(f) : nil
+    let existing = resolved[i]
 
     switch (needs, existing) {
     case (false, let r?):        plans.append((f, .skipPresent(remote: r)))
@@ -322,6 +370,21 @@ for (f, p) in plans {
 }
 
 func gb(_ b: Int64) -> String { String(format: "%.2f GB", Double(b) / 1e9) }
+func mb(_ b: Int64) -> String { String(format: "%.1f MB", Double(b) / 1e6) }
+
+/// The upload list, biggest first, written where the caller can read it.
+@discardableResult
+func writeManifest(_ items: [(dest: String, size: Int64)], to path: String, remote: String) -> [String] {
+    guard !items.isEmpty else { return [] }
+    let sorted = items.sorted { $0.size > $1.size }
+    let body = sorted.enumerated().map { i, it in
+        String(format: "%5d\t%12lld\t%@", i + 1, it.size, it.dest)
+    }.joined(separator: "\n")
+    let total = sorted.reduce(Int64(0)) { $0 + $1.size }
+    let header = "# \(sorted.count) files, \(gb(total)), largest first — destination is under \(remote)\n#\tbytes\tpath\n"
+    try? (header + body + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    return sorted.map(\.dest)
+}
 
 print("""
 
@@ -331,6 +394,24 @@ plan
   to upload (new path)       : \(toUpload)  (\(gb(uploadBytes)))
   to replace on remote       : \(toReplace)  (resampled copies of objects already there)
 """)
+
+// Manifest is useful before anything happens, so write it during the dry run too.
+// (Sizes here are pre-re-encode; the apply path rewrites them with real sizes.)
+var plannedUploads: [(dest: String, size: Int64)] = []
+for (f, p) in plans {
+    switch p {
+    case .upload(let d), .resampleThenUpload(let d, _): plannedUploads.append((d, f.size))
+    default: break
+    }
+}
+if !plannedUploads.isEmpty {
+    writeManifest(plannedUploads, to: o.manifestPath, remote: o.remote)
+    print("\nupload manifest (largest first): \(o.manifestPath)")
+    for (i, it) in plannedUploads.sorted(by: { $0.size > $1.size }).prefix(10).enumerated() {
+        print(String(format: "  %2d. %9s  %@", i + 1, (mb(it.size) as NSString).utf8String!, it.dest))
+    }
+    if plannedUploads.count > 10 { print("  … \(plannedUploads.count - 10) more in the manifest") }
+}
 
 if o.verbose || !o.apply {
     for (f, p) in plans {
@@ -365,6 +446,12 @@ func resample(_ f: LocalFlac, to rate: Int) -> Result<Int64, ResampleError> {
     let tmp = f.path + ".16bit.tmp.flac"
     try? FileManager.default.removeItem(atPath: tmp)
     // -map 0 -c:v copy keeps the embedded cover art, which -vn would drop.
+    //
+    // ffmpeg round-trips Vorbis comments through its own key names: COMMENT is
+    // rewritten as DESCRIPTION and an `encoder` tag is added. The values survive.
+    // Restoring the keys with `metaflac --remove-all-tags --import-tags-from` is
+    // NOT an option: its tag export cannot round-trip multiline fields such as
+    // UNSYNCEDLYRICS, and it removes the tags before discovering that.
     let (st, _) = run(ffmpeg, [
         "-v", "error", "-y", "-i", f.path,
         "-map", "0", "-c:v", "copy", "-map_metadata", "0",
@@ -451,11 +538,13 @@ func copyTo(_ local: String, _ remote: String) -> Bool {
     return st == 0
 }
 
-var mirrorList: [String] = []
+var mirrorItems: [(dest: String, size: Int64)] = []
 for (f, p) in plans where !failedPaths.contains(f.relative) {
     switch p {
     case .upload(let dest), .resampleThenUpload(let dest, _):
-        mirrorList.append(dest)
+        // Re-stat: a re-encoded file is much smaller than the size we planned with.
+        let size = ((try? FileManager.default.attributesOfItem(atPath: f.path))?[.size] as? Int64) ?? f.size
+        mirrorItems.append((dest, size))
     case .resampleThenReplace(let remotePath, _):
         if copyTo(f.path, o.remote + "/" + remotePath) {
             replaced += 1
@@ -468,16 +557,24 @@ for (f, p) in plans where !failedPaths.contains(f.relative) {
     }
 }
 
+// Biggest first: the long pole finishes early and the manifest reads usefully.
+let mirrorList = writeManifest(mirrorItems, to: o.manifestPath, remote: o.remote)
+if !mirrorItems.isEmpty {
+    print("upload manifest (\(mirrorItems.count) files, largest first): \(o.manifestPath)")
+}
+
 if !mirrorList.isEmpty {
     print("\nuploading \(mirrorList.count) file(s) to \(o.remote) …")
     let listFile = NSTemporaryDirectory() + "muon-cloud-upload.txt"
     try? mirrorList.joined(separator: "\n").write(toFile: listFile, atomically: true, encoding: .utf8)
     // One rclone invocation: it parallelises transfers and recreates the tree.
-    let (st, _) = run(rclone, ["copy", rootURL.path, o.remote,
-                               "--files-from-raw", listFile,
-                               "--transfers", "8", "--checkers", "16",
-                               "--stats-one-line", "--stats", "5s"],
-                      captureStdout: false, showErrors: true)
+    var args = ["copy", rootURL.path, o.remote,
+                "--files-from-raw", listFile,
+                "--order-by", "size,desc",
+                "--transfers", "8", "--checkers", "16",
+                "--stats", "15s", "--stats-one-line"]
+    if !o.logPath.isEmpty { args += ["--log-file", o.logPath, "--log-level", "INFO"] }
+    let (st, _) = run(rclone, args, captureStdout: false, showErrors: true)
     if st == 0 { uploaded = mirrorList.count } else { uploadFailures.append("rclone copy exit \(st)") }
 }
 
