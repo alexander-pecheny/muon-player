@@ -39,3 +39,6 @@ MuonPlayer/Secrets.swift
 .env
 .testaudio/
 .ffmpeg-build.log
+
+# Rendered by `deno task icon`; the committed source is design/icon/icon.svg
+design/icon/icon.png
