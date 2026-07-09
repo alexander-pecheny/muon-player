@@ -168,18 +168,23 @@ Both apps share `MuonPlayer/Assets.xcassets/AppIcon.appiconset`
 (`AppIcon-mac-*.png`), downsampled from that same 1024 art with `sips`. Without
 those slices the Mac app silently builds with **no icon at all**.
 
-The 1024 master is generated:
+The 1024 master is generated from `design/icon/icon.js`, which holds the geometry
+and the tuned defaults. It is the only source: the CLI and the live tuner both
+import it. Needs `deno`, `rsvg-convert` (librsvg) and `magick` (imagemagick).
 
 ```bash
 cd design/icon
-python3 gen_icon.py                         # tunables at top; writes icon.svg
-rsvg-convert -w 1024 -h 1024 icon.svg -o /tmp/raw.png   # brew install librsvg
-python3 -c "from PIL import Image; Image.open('/tmp/raw.png').convert('RGB').save('/tmp/AppIcon-1024.png')"  # strip alpha (iOS requires opaque)
-cp /tmp/AppIcon-1024.png ../../MuonPlayer/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
-
-# then regenerate the macOS slices from it
-python3 scripts/gen-mac-icon.py
+deno task icon                  # writes icon.svg + icon.png, installs AppIcon-1024.png
+deno task icon --cone 0 --tint '#00aafd'   # override any knob from RANGES/COLORS
+deno task lab                   # http://localhost:8000/lab.html — sliders, live preview
+python3 ../../scripts/gen-mac-icon.py      # then regenerate the macOS slices
 ```
 
-The icon: a schematic front-on speaker driver flanked by radiating waves shaped
-like `(((((o))` — the arcs also spell "muon" (m + u, the driver as o, n).
+The lab is served rather than opened as a `file://` URL because browsers refuse
+ES-module imports from `file://`. Its **Copy SVG** button and the URL hash round-trip
+a tuning; paste the hash values into `RANGES`/`COLORS` in `icon.js` to make them the
+new defaults.
+
+The icon: a schematic front-on speaker driver flanked by radiating waves that
+flare outwards (the `cone` knob; 0 makes them parallel `)))`). The arcs also
+spell "muon" (m + u, the driver as o, n).
