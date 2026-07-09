@@ -160,6 +160,34 @@ together); two sibling rips do not, since they are what we compare. Deletions go
 to the Trash, and `--rescue-art` copies any cover the survivor lacks before the
 loser is removed.
 
+`scripts/muon-cloud-sync.swift` re-encodes any FLAC that is not 16-bit (halving
+the rate inside its own family: 96k→48k, 88.2k→44.1k) and uploads whatever the
+rclone remote does not already hold.
+
+```bash
+swift scripts/muon-cloud-sync.swift                 # dry run; writes the manifest
+swift scripts/muon-cloud-sync.swift --apply --log /tmp/rclone.log
+python3 scripts/test-muon-cloud-sync.py             # synthetic suite (fake remote)
+```
+
+A file is identified by the MD5 of its **decoded audio**, which FLAC stores in
+STREAMINFO, so a copy is recognised wherever it is filed — filename is not
+identity (a real library had 38 same-named files holding different recordings).
+Re-encoding changes the bytes, so a file whose original was already on the remote
+is written *over* that object rather than beside it; the mapping is resolved
+before any re-encode, and replacements run before the bulk upload.
+
+> Homebrew's `ffmpeg` is **not** built with `libsoxr`. The script detects that and
+> falls back to `swr` with `triangular_hp` dither — reducing 24-bit to 16-bit by
+> truncation would add quantisation distortion. It also uses `-map 0 -c:v copy`
+> (not `-vn`) so embedded cover art survives. ffmpeg still renames `COMMENT` to
+> `DESCRIPTION`; do **not** try to fix that with `metaflac --remove-all-tags
+> --import-tags-from`, whose tag export cannot round-trip multiline fields like
+> `UNSYNCEDLYRICS` and which removes the tags before it finds out.
+
+Tests run the whole flow against a local directory as the "remote" — rclone treats
+a bare path as one — so nothing touches a cloud account.
+
 ## App icon
 
 Both apps share `MuonPlayer/Assets.xcassets/AppIcon.appiconset`
