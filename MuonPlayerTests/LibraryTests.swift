@@ -130,6 +130,29 @@ struct LibraryTests {
         await db.markScrobbled(id: pending[1].id)
         #expect(await db.pendingScrobbleCount() == 0)
     }
+
+    @Test("Album tracks group by folder, so two rips of one release don't interleave")
+    func albumTracksGroupByFolder() async throws {
+        let db = makeDB()
+        // The same release ripped twice. Both fold into one album row (identity is
+        // artist+title+year), so ordering by track number alone would interleave
+        // them: 1, 1, 2, 2, 3, 3.
+        for (folder, codec) in [("/m/Album [FLAC]", "flac"), ("/m/Album [MP3]", "mp3")] {
+            for no in 1...3 {
+                var m = meta(title: "Song \(no)", artist: "Band", album: "Album")
+                m.trackNo = no
+                await db.upsertTrack(path: "\(folder)/0\(no).\(codec)", meta: m, hasArtwork: false, mtime: 1)
+            }
+        }
+
+        let album = try #require(await db.albums().first { $0.title == "Album" })
+        let tracks = await db.tracks(inAlbum: album)
+        let folders = tracks.map { $0.url.deletingLastPathComponent().lastPathComponent }
+
+        #expect(tracks.map(\.title) == ["Song 1", "Song 2", "Song 3", "Song 1", "Song 2", "Song 3"])
+        #expect(folders == ["Album [FLAC]", "Album [FLAC]", "Album [FLAC]",
+                            "Album [MP3]", "Album [MP3]", "Album [MP3]"])
+    }
 }
 
 /// "Repeat Artist" walks an artist's discography in release order, independent of

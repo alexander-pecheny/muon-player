@@ -1,7 +1,12 @@
 #!/bin/bash
 # Builds a lean audio-only FFmpeg (libav*) as an xcframework for iOS + macOS.
 # Slices: iOS-simulator arm64, iOS-device arm64, macOS arm64.
-# Native opus/vorbis/mp3/aac/flac decoders — no external codec libraries.
+# Native opus/vorbis/mp3/aac/flac/wavpack/ape decoders — no external codec
+# libraries, and nothing GPL-only (all of these are LGPL in FFmpeg).
+#
+# The --enable-decoder/--enable-demuxer allowlists below must cover every
+# extension in AudioFormat.supportedExtensions. A format listed there but missing
+# here is scanned into the library and then silently fails to play.
 # Already-built slices under .ffmpeg-build are reused; delete one to force a rebuild.
 set -euo pipefail
 
@@ -57,9 +62,9 @@ build_slice () {
     --disable-network \
     --disable-everything \
     --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
-    --enable-decoder=vorbis,opus,mp3,mp3float,aac,aac_latm,alac,flac,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f32be,pcm_s16be,pcm_u8,wmav1,wmav2,ac3,eac3 \
+    --enable-decoder=vorbis,opus,mp3,mp3float,aac,aac_latm,alac,flac,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f32be,pcm_s16be,pcm_u8,wmav1,wmav2,ac3,eac3,wavpack,ape \
     --enable-parser=vorbis,opus,mpegaudio,aac,aac_latm,flac,ac3 \
-    --enable-demuxer=ogg,matroska,mov,mp3,aac,flac,wav,aiff,caf,asf,ac3,eac3 \
+    --enable-demuxer=ogg,matroska,mov,mp3,aac,flac,wav,aiff,caf,asf,ac3,eac3,wv,ape \
     --enable-protocol=file \
     --disable-asm
 

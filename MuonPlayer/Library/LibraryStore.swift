@@ -11,6 +11,31 @@ final class LibraryStore {
     private(set) var trackCount = 0
     private(set) var scanProgress: (done: Int, total: Int)?
 
+    /// What the scan is doing right now. Walking the folders is its own long
+    /// phase on a big library — it has no total to count against, so it reports
+    /// how many files it has found so far rather than showing a bare spinner.
+    enum ScanPhase: Equatable {
+        case idle
+        case findingFiles(found: Int)
+        case readingTags(done: Int, total: Int)
+
+        var label: String {
+            switch self {
+            case .idle: return ""
+            case .findingFiles(let n): return "Finding music… \(n) file\(n == 1 ? "" : "s")"
+            case .readingTags(let done, let total): return "Reading tags \(done) / \(total)"
+            }
+        }
+
+        /// 0…1 while reading tags; nil while walking folders (no known total).
+        var fraction: Double? {
+            guard case .readingTags(let done, let total) = self, total > 0 else { return nil }
+            return Double(done) / Double(total)
+        }
+    }
+
+    private(set) var scanPhase: ScanPhase = .idle
+
     let database: Database
     private var scanner: FileScanner
 
@@ -22,10 +47,10 @@ final class LibraryStore {
     /// roots (before the user adds a folder) or many, so it uses `roots` instead.
     var rootURL: URL { roots.first?.url ?? LibraryRoot.documents.url }
 
-    init(roots: [LibraryRoot] = [.documents]) {
+    init(roots: [LibraryRoot] = [.documents], databaseName: String = "muon-library.sqlite") {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        let dbPath = support.appendingPathComponent("muon-library.sqlite").path
+        let dbPath = support.appendingPathComponent(databaseName).path
         self.database = Database(path: dbPath)
         self.roots = roots
         self.scanner = FileScanner(roots: roots.map(\.url))
@@ -70,7 +95,8 @@ final class LibraryStore {
     func rescan() async {
         guard !isScanning else { return }
         isScanning = true
-        defer { isScanning = false; scanProgress = nil }
+        scanPhase = .findingFiles(found: 0)
+        defer { isScanning = false; scanProgress = nil; scanPhase = .idle }
 
         // If the metadata-reading logic changed since this DB was populated,
         // re-read every file (repairs libraries scanned by the buggy tag reader).
@@ -83,7 +109,12 @@ final class LibraryStore {
         // the UI. Returns every current path (for pruning) and just the subset
         // whose metadata needs (re)reading.
         let (existingPaths, toRead) = await Task.detached(priority: .utility) { [scanner] in
-            let files = scanner.findAudioFiles()
+            let files = scanner.findAudioFiles { found in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isScanning else { return }
+                    self.scanPhase = .findingFiles(found: found)
+                }
+            }
             let existingPaths = Set(files.map(\.path))
             var toRead: [(path: String, url: URL, mtime: Double)] = []
             for url in files {
@@ -108,33 +139,65 @@ final class LibraryStore {
         await loadFromDatabase()
     }
 
-    /// Read metadata for the given files concurrently (FFmpeg decode dominates the
-    /// scan, so parallelism across cores is the big win) and upsert each result
-    /// as it arrives. Upserts stay serialized through the Database actor.
+    /// Read metadata for the given files concurrently and upsert the results.
+    ///
+    /// Reading a file's tags takes ~2ms; what used to dominate a large scan was
+    /// everything the consumer did *per file*. Two things fix that:
+    ///
+    /// - Results are upserted in batches inside one transaction, instead of one
+    ///   autocommit (and one `prepare`) per row.
+    /// - Progress is published a few times a second rather than once per file.
+    ///   Every publish invalidates `@Observable` state and re-renders the album
+    ///   grid; doing that 14k times pinned the main thread and starved the UI —
+    ///   the scan indicator itself never got a chance to draw.
     private func readAndUpsert(_ items: [(path: String, url: URL, mtime: Double)]) async {
         let total = items.count
         var processed = 0
-        scanProgress = (0, total)
+        publishProgress(done: 0, total: total)
+
+        var batch: [TrackUpsert] = []
+        batch.reserveCapacity(Self.batchSize)
+
+        func flush() async {
+            guard !batch.isEmpty else { return }
+            await database.upsertTracks(batch)
+            batch.removeAll(keepingCapacity: true)
+        }
 
         let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount)
-        await withTaskGroup(of: (String, TrackMetadata, Double).self) { group in
+        await withTaskGroup(of: TrackUpsert.self) { group in
             var next = 0
             func addTask() {
                 guard next < items.count else { return }
                 let item = items[next]; next += 1
                 group.addTask(priority: .utility) {
-                    (item.path, FFmpegMetadata.read(url: item.url, includeArtwork: false), item.mtime)
+                    let meta = FFmpegMetadata.read(url: item.url, includeArtwork: false)
+                    return TrackUpsert(path: item.path, meta: meta, hasArtwork: meta.hasArtwork, mtime: item.mtime)
                 }
             }
             for _ in 0..<min(maxConcurrent, items.count) { addTask() }
 
-            while let (path, meta, mtime) = await group.next() {
-                await database.upsertTrack(path: path, meta: meta, hasArtwork: meta.hasArtwork, mtime: mtime)
+            while let result = await group.next() {
+                batch.append(result)
                 processed += 1
-                scanProgress = (processed, total)
+                if batch.count >= Self.batchSize { await flush() }
+                publishProgress(done: processed, total: total)
                 addTask()
             }
         }
+        await flush()
+        publishProgress(done: total, total: total, force: true)
+    }
+
+    private static let batchSize = 200
+
+    /// Rate-limits progress publication to ~10 Hz.
+    private var lastProgressPublish = Date.distantPast
+    private func publishProgress(done: Int, total: Int, force: Bool = false) {
+        guard force || Date().timeIntervalSince(lastProgressPublish) > 0.1 else { return }
+        lastProgressPublish = Date()
+        scanProgress = (done, total)
+        scanPhase = .readingTags(done: done, total: total)
     }
 
     private func readMetadata(url: URL) async -> TrackMetadata {
@@ -294,13 +357,26 @@ final class LibraryStore {
 
     // MARK: - Folder browsing
 
+    /// The track's folder, relative to whichever library root holds it — what to
+    /// show when two rips of one album (say FLAC and MP3) need telling apart.
+    /// Falls back to the root's own name for a file sitting directly in it.
+    func relativeFolder(for track: Track) -> String {
+        let folder = track.url.deletingLastPathComponent().path
+        guard let root = root(containing: track.url.path) else { return folder }
+        return root.relativePath(of: folder) ?? root.name
+    }
+
     /// Library tracks that live directly in `folder`, with full metadata.
     func folderTracks(in folder: URL) async -> [Track] {
         await database.tracks(directlyInFolder: LibraryRoot.canonicalPath(of: folder))
     }
 
     /// Load embedded artwork for a track path, decoded off the main actor.
-    func artwork(forPath path: String) async -> PlatformImage? {
+    ///
+    /// `maxPixel` caps the decoded size — grid cells ask for a thumbnail rather
+    /// than a full 1500²-pixel cover, which is the difference between a smooth
+    /// scroll and a stuttering one. Pass a large value for full-size art.
+    func artwork(forPath path: String, maxPixel: Int = 400) async -> PlatformImage? {
         let url = URL(fileURLWithPath: path)
         // Decode on a GCD queue, not the Swift cooperative pool: a rescan fills the
         // pool with non-suspending FFmpeg tasks, so a Task.detached here can wait
@@ -309,7 +385,8 @@ final class LibraryStore {
         return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let meta = FFmpegMetadata.read(url: url, includeArtwork: true)
-                cont.resume(returning: meta.artwork.flatMap(PlatformImage.init(data:)))
+                guard let data = meta.artwork else { cont.resume(returning: nil); return }
+                cont.resume(returning: PlatformImage.thumbnail(from: data, maxPixel: maxPixel))
             }
         }
     }

@@ -1,14 +1,17 @@
 import SwiftUI
 
 /// One track in a list. Double-click plays; the context menu enqueues and edits
-/// tags. `number` shows the track number in an album listing.
+/// tags. The trailing columns (folder, format, bitrate, duration) are what let
+/// you tell two rips of the same album apart.
 struct MacTrackRow: View {
     let track: Track
     var context: [Track]
     var showArtwork = false
     var showNumber = false
+    var showFolder = true
 
     @Environment(Player.self) private var player
+    @Environment(LibraryStore.self) private var library
     @State private var editing = false
 
     private var isCurrent: Bool { player.currentTrack?.url == track.url }
@@ -45,16 +48,30 @@ struct MacTrackRow: View {
 
             Spacer(minLength: 8)
 
-            Text(track.formatLabel)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-
-            if let d = track.duration {
-                Text(formatDuration(d))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
+            if showFolder {
+                Text(library.relativeFolder(for: track))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(minWidth: 90, idealWidth: 200, maxWidth: 280, alignment: .trailing)
+                    .help(track.url.deletingLastPathComponent().path)
             }
+
+            Text(track.formatLabel)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 46, alignment: .trailing)
+
+            Text(track.bitrateKbps.map { "\($0) kbps" } ?? "—")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 62, alignment: .trailing)
+
+            Text(track.duration.map(formatDuration) ?? "—")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .trailing)
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())

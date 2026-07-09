@@ -10,7 +10,10 @@ struct MuonPlayerMacApp: App {
 
     init() {
         let folders = LibraryFolders()
-        let lib = LibraryStore(roots: folders.roots)
+        // The self-test plays tracks, which records history and queues scrobbles.
+        // Keep all of that out of the real library.
+        let lib = LibraryStore(roots: folders.roots,
+                               databaseName: MacSelfTest.isEnabled ? "muon-selftest.sqlite" : "muon-library.sqlite")
         _folders = State(initialValue: folders)
         _library = State(initialValue: lib)
         _scrobbler = State(initialValue: makeScrobbler(for: lib))

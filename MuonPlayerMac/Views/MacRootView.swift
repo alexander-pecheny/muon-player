@@ -9,27 +9,33 @@ struct MacRootView: View {
     var body: some View {
         @Bindable var router = router
 
-        NavigationSplitView {
-            sidebar
-        } detail: {
-            if library.roots.isEmpty {
-                WelcomeView()
-            } else {
-                NavigationStack(path: router.path) {
-                    section(router.section)
-                        .navigationDestination(for: Album.self) { MacAlbumDetailView(album: $0) }
-                        .navigationDestination(for: ArtistRef.self) { MacArtistView(artist: $0.name) }
-                        .navigationDestination(for: FolderRef.self) { MacFoldersView(directory: $0.url) }
+        // The player bar is a sibling of the split view, not a safe-area inset on
+        // it: an inset there is not propagated into the detail column's scroll
+        // view, so the last rows of a long list stayed hidden behind the bar.
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                sidebar
+            } detail: {
+                if library.roots.isEmpty {
+                    WelcomeView()
+                } else {
+                    NavigationStack(path: router.path) {
+                        section(router.section)
+                            .navigationDestination(for: Album.self) { MacAlbumDetailView(album: $0) }
+                            .navigationDestination(for: ArtistRef.self) { MacArtistView(artist: $0.name) }
+                            .navigationDestination(for: FolderRef.self) { MacFoldersView(directory: $0.url) }
+                    }
                 }
             }
+            .inspector(isPresented: $router.showNowPlaying) {
+                MacNowPlayingView()
+                    .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
+            }
+
+            MacPlayerBar()
         }
         .tint(player.accentColor)
         .spaceTogglesPlayback(player)
-        .safeAreaInset(edge: .bottom, spacing: 0) { MacPlayerBar() }
-        .inspector(isPresented: $router.showNowPlaying) {
-            MacNowPlayingView()
-                .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
-        }
         .sheet(isPresented: $router.showQueue) { MacQueueView() }
     }
 
@@ -39,26 +45,41 @@ struct MacRootView: View {
         Binding(get: { router.section }, set: { if let s = $0 { router.section = s } })
     }
 
+    // A `safeAreaInset` whose content starts out empty never lays the inset in
+    // once it appears, so the scan status simply never showed. A plain VStack
+    // under the List does.
     private var sidebar: some View {
-        List(selection: selection) {
-            Section("Library") {
-                ForEach(MacRouter.Section.allCases) { s in
-                    Label(s.title, systemImage: s.systemImage).tag(s)
+        VStack(spacing: 0) {
+            List(selection: selection) {
+                Section("Library") {
+                    ForEach(MacRouter.Section.allCases) { s in
+                        Label(s.title, systemImage: s.systemImage).tag(s)
+                    }
                 }
             }
+            scanStatus
         }
         .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 260)
-        .safeAreaInset(edge: .bottom) { scanStatus }
     }
 
     @ViewBuilder private var scanStatus: some View {
-        if let progress = library.scanProgress {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Scanning \(progress.done) / \(progress.total)")
+        if library.scanPhase != .idle {
+            VStack(alignment: .leading, spacing: 5) {
+                Divider()
+                Text(library.scanPhase.label)
                     .font(.caption).foregroundStyle(.secondary)
-                ProgressView(value: Double(progress.done), total: Double(max(1, progress.total)))
+                    .lineLimit(1).monospacedDigit()
+                    .padding(.top, 3)
+                // Walking the folders has no total, so it gets an indeterminate bar.
+                if let fraction = library.scanPhase.fraction {
+                    ProgressView(value: fraction)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+            .transition(.opacity)
         }
     }
 

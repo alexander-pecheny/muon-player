@@ -33,6 +33,14 @@ struct HistoryEntry: Identifiable, Sendable {
 
 /// Fields a user can override via tag editing (stored in the DB, layered over
 /// the file's own tags so the source files are never modified).
+/// One file's metadata, queued for a batched write.
+struct TrackUpsert: Sendable {
+    let path: String
+    let meta: TrackMetadata
+    let hasArtwork: Bool
+    let mtime: Double
+}
+
 struct TagEdits: Sendable {
     var title: String?
     var artist: String?
@@ -46,7 +54,7 @@ struct TagEdits: Sendable {
 /// The current metadata-reading logic version. Bump to force a full re-read of
 /// every file on next launch (used to repair libraries scanned by a buggy
 /// reader — e.g. the AV_DICT_IGNORE_SUFFIX album/album_artist collision).
-let kScannerVersion: Int32 = 4
+let kScannerVersion: Int32 = 5
 
 /// A pending or completed scrobble row.
 struct ScrobbleRow: Sendable {
@@ -202,6 +210,18 @@ actor Database {
 
     /// Insert or update a track by path. Returns the row id.
     @discardableResult
+    /// Upsert many tracks in a single transaction, reusing one prepared statement.
+    /// A scan otherwise pays a commit (and an FTS trigger flush) per file.
+    func upsertTracks(_ items: [TrackUpsert]) {
+        guard !items.isEmpty else { return }
+        exec("BEGIN IMMEDIATE;")
+        for item in items {
+            _ = upsertTrack(path: item.path, meta: item.meta, hasArtwork: item.hasArtwork, mtime: item.mtime)
+        }
+        exec("COMMIT;")
+    }
+
+    @discardableResult
     func upsertTrack(path: String, meta: TrackMetadata, hasArtwork: Bool, mtime: Double) -> Int64? {
         // Only file-derived columns are written here; ov_* override columns are
         // deliberately left untouched so user tag edits survive rescans.
@@ -308,6 +328,10 @@ actor Database {
     private let effAlbum = "COALESCE(NULLIF(tracks.ov_album,''), tracks.album)"
     private let effAlbumArtistGroup = "COALESCE(NULLIF(tracks.ov_album_artist,''), NULLIF(tracks.album_artist,''), NULLIF(tracks.ov_artist,''), NULLIF(tracks.artist,''), 'Unknown Artist')"
     private let effAlbumGroup = "COALESCE(NULLIF(tracks.ov_album,''), NULLIF(tracks.album,''), 'Unknown Album')"
+    /// The directory part of `path`. `replace()` yields every character of the
+    /// path except '/', and `rtrim` strips trailing characters in that set — so
+    /// it eats the filename and stops at the last separator.
+    private let pathFolder = "rtrim(tracks.path, replace(tracks.path, '/', ''))"
 
     func albums() -> [Album] {
         let sql = """
@@ -366,13 +390,19 @@ actor Database {
         return albums
     }
 
+    /// Tracks of an album, grouped by the folder they live in before disc/track.
+    ///
+    /// The same release often exists twice on disk (a FLAC rip and an MP3 rip),
+    /// and both fold into one album row because the identity is artist+title+year.
+    /// Ordering by disc/track alone then interleaves them — track 1, track 1,
+    /// track 2, track 2… Folder first keeps each rip as a contiguous block.
     func tracks(inAlbum album: Album) -> [Track] {
         let sql = """
         SELECT \(trackColumns) FROM tracks
         WHERE \(effAlbumArtistGroup) = ?
           AND \(effAlbumGroup) = ?
           AND tracks.year IS ?
-        ORDER BY disc_no, \(effTrackNo), \(effTitle) COLLATE NOCASE;
+        ORDER BY \(pathFolder) COLLATE NOCASE, disc_no, \(effTrackNo), \(effTitle) COLLATE NOCASE;
         """
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }

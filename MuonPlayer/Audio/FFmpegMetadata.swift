@@ -4,7 +4,7 @@ import CFFmpeg
 /// Tags + artwork read straight from the container via libavformat, so it works
 /// for every format FFmpeg can demux (including ogg/opus/flac that AVFoundation
 /// can't parse).
-struct TrackMetadata {
+struct TrackMetadata: Sendable {
     var title: String?
     var artist: String?
     var album: String?
@@ -29,6 +29,21 @@ enum FFmpegMetadata {
         let rc = url.path.withCString { avformat_open_input(&ctx, $0, nil, nil) }
         guard rc == 0, let ctx else { return meta }
         defer { var c: UnsafeMutablePointer<AVFormatContext>? = ctx; avformat_close_input(&c) }
+
+        // `avformat_find_stream_info` otherwise reads up to 5 MB per file and tries
+        // to parse the embedded cover-art stream (a PNG/JPEG with no declared
+        // size), which dominates a library scan. All we need from it is the audio
+        // stream's codec, sample rate and bitrate — a small probe covers that.
+        //
+        // The attached picture itself is untouched: the demuxer fills
+        // `stream.attached_pic` while reading the header, before any of this.
+        ctx.pointee.probesize = 256 * 1024
+        ctx.pointee.max_analyze_duration = Int64(AV_TIME_BASE)   // 1 second
+        for i in 0..<Int(ctx.pointee.nb_streams) {
+            guard let stream = ctx.pointee.streams[i],
+                  stream.pointee.codecpar?.pointee.codec_type != AVMEDIA_TYPE_AUDIO else { continue }
+            stream.pointee.discard = AVDISCARD_ALL
+        }
         avformat_find_stream_info(ctx, nil)
 
         if ctx.pointee.duration > 0 {
@@ -109,7 +124,9 @@ enum FFmpegMetadata {
                 guard let entry = av_dict_get(dict, key, nil, 0),
                       let v = entry.pointee.value else { continue }
                 let s = String(cString: v).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !s.isEmpty { return s }
+                // Undeclared-encoding ID3 frames reach us Latin-1-decoded; recover
+                // the CP1251 text hiding inside.
+                if !s.isEmpty { return TextEncodingRepair.repair(s) }
             }
             return nil
         }

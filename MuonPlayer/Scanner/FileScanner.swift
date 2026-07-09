@@ -20,32 +20,32 @@ final class FileScanner: Sendable {
     /// Audio file URLs found under the roots, deduplicated and sorted by path.
     /// Nested roots (a folder and its parent both added) would otherwise yield
     /// the same file twice and make the scan do double work.
-    func findAudioFiles() -> [URL] {
+    ///
+    /// `onProgress` is called with the running count as directories are walked —
+    /// on a large library this pass takes long enough that the UI needs to say
+    /// something other than "working".
+    func findAudioFiles(onProgress: (@Sendable (Int) -> Void)? = nil) -> [URL] {
+        let fm = FileManager.default
         var seen = Set<String>()
         var files: [URL] = []
+
         for root in roots {
-            for url in Self.audioFiles(under: root) where seen.insert(url.path).inserted {
+            guard let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                guard AudioFormat.supportedExtensions.contains(url.pathExtension.lowercased()),
+                      seen.insert(url.path).inserted else { continue }
                 files.append(url)
+                if files.count % 200 == 0 { onProgress?(files.count) }
             }
         }
+
+        onProgress?(files.count)
         return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-    }
-
-    private static func audioFiles(under root: URL) -> [URL] {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        var files: [URL] = []
-        for case let url as URL in enumerator {
-            if AudioFormat.supportedExtensions.contains(url.pathExtension.lowercased()) {
-                files.append(url)
-            }
-        }
-        return files
     }
 
     /// Convenience used by tests: audio files as bare Tracks (no metadata).

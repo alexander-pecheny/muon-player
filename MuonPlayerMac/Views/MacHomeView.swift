@@ -72,7 +72,7 @@ struct MacHomeView: View {
             if !results.songs.isEmpty {
                 Section("Songs") {
                     ForEach(results.songs) { track in
-                        MacTrackRow(track: track, context: results.songs, showArtwork: true)
+                        MacTrackRow(track: track, context: results.songs, showArtwork: true, showFolder: false)
                     }
                 }
             }

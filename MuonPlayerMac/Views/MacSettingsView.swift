@@ -69,6 +69,11 @@ private struct LibrarySettings: View {
                 .disabled(library.isScanning || folders.isEmpty)
             }
 
+            if library.scanPhase != .idle {
+                Text(library.scanPhase.label)
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+
             Text("Folders are indexed in place. Music is never copied or moved.")
                 .font(.caption).foregroundStyle(.secondary)
         }

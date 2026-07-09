@@ -1,17 +1,39 @@
 import SwiftUI
 
 /// In-memory cache of decoded album art, keyed by the source file path.
+///
+/// Scrolling a large grid revisits the same covers constantly, and each miss
+/// costs an FFmpeg open plus an image decode. Loads are therefore shared: cells
+/// that ask for the same path while one is in flight await that same task rather
+/// than starting their own.
 @MainActor
 final class ArtworkCache {
     static let shared = ArtworkCache()
+
     private let cache = NSCache<NSString, PlatformImage>()
     private var misses = Set<String>()
+    private var inFlight: [String: Task<PlatformImage?, Never>] = [:]
+
+    init() {
+        cache.countLimit = 500
+    }
 
     func image(for path: String) -> PlatformImage? { cache.object(forKey: path as NSString) }
     func isKnownMiss(_ path: String) -> Bool { misses.contains(path) }
-    func store(_ image: PlatformImage?, for path: String) {
-        if let image { cache.setObject(image, forKey: path as NSString) }
-        else { misses.insert(path) }
+
+    /// The cached image, loading it (once) if needed.
+    func load(path: String, from library: LibraryStore) async -> PlatformImage? {
+        if let cached = image(for: path) { return cached }
+        if isKnownMiss(path) { return nil }
+        if let running = inFlight[path] { return await running.value }
+
+        let task = Task<PlatformImage?, Never> { await library.artwork(forPath: path) }
+        inFlight[path] = task
+        let image = await task.value
+        inFlight[path] = nil
+
+        if let image { cache.setObject(image, forKey: path as NSString) } else { misses.insert(path) }
+        return image
     }
 }
 
@@ -55,10 +77,14 @@ struct ArtworkView: View {
 
     private func load() async {
         guard let path else { image = nil; return }
+        // Synchronous cache hit: assigning before any await keeps an already-decoded
+        // cover from flashing its placeholder for a frame while scrolling.
         if let cached = ArtworkCache.shared.image(for: path) { image = cached; return }
-        if ArtworkCache.shared.isKnownMiss(path) { image = nil; return }
-        let loaded = await library.artwork(forPath: path)
-        ArtworkCache.shared.store(loaded, for: path)
-        if self.path == path { image = loaded }
+        image = nil
+
+        let loaded = await ArtworkCache.shared.load(path: path, from: library)
+        // The cell may have been recycled onto another album mid-load.
+        guard !Task.isCancelled, self.path == path else { return }
+        image = loaded
     }
 }

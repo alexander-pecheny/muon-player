@@ -21,7 +21,7 @@ struct MacQueueView: View {
             List {
                 if let current = player.currentTrack {
                     Section("Now Playing") {
-                        MacTrackRow(track: current, context: [current], showArtwork: true)
+                        MacTrackRow(track: current, context: [current], showArtwork: true, showFolder: false)
                     }
                 }
                 Section("Next in Queue") {
@@ -30,7 +30,7 @@ struct MacQueueView: View {
                     } else {
                         ForEach(player.upNext) { item in
                             HStack {
-                                MacTrackRow(track: item.track, context: [item.track], showArtwork: true)
+                                MacTrackRow(track: item.track, context: [item.track], showArtwork: true, showFolder: false)
                                 Button {
                                     player.removeFromQueue(id: item.id)
                                 } label: { Image(systemName: "minus.circle") }

@@ -39,7 +39,7 @@ struct MacFoldersView: View {
             if !shownTracks.isEmpty {
                 Section {
                     ForEach(shownTracks) { track in
-                        MacTrackRow(track: track, context: trackFiles)
+                        MacTrackRow(track: track, context: trackFiles, showFolder: false)
                     }
                 }
             }
