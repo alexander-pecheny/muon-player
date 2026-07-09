@@ -200,9 +200,3 @@ struct TrackRow: View {
     }
 }
 
-func formatDuration(_ seconds: TimeInterval) -> String {
-    guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-    let mins = Int(seconds) / 60
-    let secs = Int(seconds) % 60
-    return String(format: "%d:%02d", mins, secs)
-}

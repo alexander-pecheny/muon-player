@@ -12,31 +12,49 @@ final class LibraryStore {
     private(set) var scanProgress: (done: Int, total: Int)?
 
     let database: Database
-    private let scanner: FileScanner
+    private var scanner: FileScanner
 
-    /// Root folder of the music library (topmost folder = artist, per playhead).
-    /// Symlinks are resolved so its path matches the `/private/var/…` form stored
-    /// for track files (otherwise folder/playhead path prefixes never match).
-    var rootURL: URL { scanner.rootURL.resolvingSymlinksInPath() }
+    /// The folders being indexed. iOS has exactly one (Documents); on macOS the
+    /// user adds and removes them.
+    private(set) var roots: [LibraryRoot]
 
-    init(rootURL: URL? = nil) {
+    /// The single-root convenience the iOS UI browses from. macOS can have zero
+    /// roots (before the user adds a folder) or many, so it uses `roots` instead.
+    var rootURL: URL { roots.first?.url ?? LibraryRoot.documents.url }
+
+    init(roots: [LibraryRoot] = [.documents]) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let dbPath = support.appendingPathComponent("muon-library.sqlite").path
         self.database = Database(path: dbPath)
-        self.scanner = FileScanner(rootURL: rootURL)
+        self.roots = roots
+        self.scanner = FileScanner(roots: roots.map(\.url))
+    }
+
+    convenience init(rootURL: URL) {
+        self.init(roots: [LibraryRoot(rootURL)])
+    }
+
+    /// Re-point the library at a new set of folders and reindex. Tracks under
+    /// folders that were removed are pruned by the rescan.
+    func setRoots(_ newRoots: [LibraryRoot]) async {
+        roots = newRoots
+        scanner = FileScanner(roots: newRoots.map(\.url))
+        await rescan()
+    }
+
+    /// The root `path` lives under, if any.
+    private func root(containing path: String) -> LibraryRoot? {
+        roots.first { $0.relativePath(of: path) != nil }
     }
 
     func loadFromDatabase() async {
-        // Use the *canonical* Documents path so `docs` matches the `/private/var/…`
-        // form the directory enumerator stores. `resolvingSymlinksInPath()` does NOT
-        // add `/private` on iOS, so it left `docs` as `/var/…`; that mismatch made
-        // every stored row look stale, rewriting all paths to the broken `/var/…`
-        // form each launch and forcing a full rescan on every restart.
-        let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let docs = (try? docsURL.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath)
-            ?? docsURL.resolvingSymlinksInPath().path
-        await database.normalizeContainerPaths(currentDocuments: docs)
+        #if os(iOS)
+        // The data-container UUID changes on every install/update, so every stored
+        // absolute path goes stale. Rewrite them to the current container before
+        // any path-prefix query runs. macOS roots are user-chosen and stable.
+        await database.normalizeContainerPaths(currentDocuments: LibraryRoot.documents.path)
+        #endif
         albums = await database.albums()
         trackCount = await database.trackCount()
     }
@@ -171,7 +189,7 @@ final class LibraryStore {
     /// then disc/track (used by the "Repeat Top Folder" playhead and shuffle).
     func artistFolderTracks(for track: Track) async -> [Track] {
         guard let folder = topFolder(for: track) else { return [] }
-        let tracks = await database.tracks(underRelativeTopFolder: folder)
+        let tracks = await database.tracks(underFolder: folder)
         return Self.orderByAlbum(tracks)
     }
 
@@ -182,15 +200,12 @@ final class LibraryStore {
         return Self.orderByAlbum(tracks)
     }
 
-    /// The first folder component of `track` under the app's Documents dir (its
-    /// artist folder). Derived from the "/Documents/" marker in the stored path,
-    /// so it doesn't depend on `/var` vs `/private/var` normalization.
+    /// Absolute path of the root-level folder holding `track` (its artist folder).
+    /// Nil when the file sits directly in a root, which therefore has no artist
+    /// folder to scope playback to.
     func topFolder(for track: Track) -> String? {
         let path = track.url.path
-        guard let r = path.range(of: "/Documents/") else { return nil }
-        let comps = path[r.upperBound...].split(separator: "/")
-        // Need folder/.../file — a file directly in Documents has no artist folder.
-        return comps.count >= 2 ? String(comps[0]) : nil
+        return root(containing: path)?.topFolder(of: path)
     }
 
     /// Order tracks chronologically by album (year, then title), then disc/track,
@@ -279,12 +294,9 @@ final class LibraryStore {
 
     // MARK: - Folder browsing
 
-    /// Library tracks that live directly in `folder`, with full metadata. Matched
-    /// by the folder's path relative to the app's Documents dir.
+    /// Library tracks that live directly in `folder`, with full metadata.
     func folderTracks(in folder: URL) async -> [Track] {
-        let path = folder.path
-        let rel = path.range(of: "/Documents/").map { String(path[$0.upperBound...]) } ?? ""
-        return await database.tracks(inRelativeFolder: rel)
+        await database.tracks(directlyInFolder: LibraryRoot.canonicalPath(of: folder))
     }
 
     /// Load embedded artwork for a track path, decoded off the main actor.

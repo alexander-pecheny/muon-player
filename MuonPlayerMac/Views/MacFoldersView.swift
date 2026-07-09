@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// A plain file-tree browser of the library folder (On My iPhone → MuonPlayer).
-/// Folders drill in; audio files play with their folder as the context.
-struct FoldersView: View {
-    /// nil at the root — resolves to the library root folder.
+/// A file-tree browser. At the top level it lists the library's root folders;
+/// below that, the real directory contents.
+struct MacFoldersView: View {
+    /// nil at the top level, where the listing is the set of library roots.
     var directory: URL? = nil
 
     @Environment(LibraryStore.self) private var library
@@ -13,7 +13,7 @@ struct FoldersView: View {
     @State private var loaded = false
     @State private var query = ""
 
-    private var dir: URL { directory ?? library.rootURL }
+    private var isRoot: Bool { directory == nil }
 
     private var shownFolders: [URL] {
         guard !query.isEmpty else { return subfolders }
@@ -30,7 +30,8 @@ struct FoldersView: View {
                 Section {
                     ForEach(shownFolders, id: \.path) { folder in
                         NavigationLink(value: FolderRef(url: folder)) {
-                            Label(folder.lastPathComponent, systemImage: "folder")
+                            Label(folder.lastPathComponent,
+                                  systemImage: isRoot ? "folder.badge.gearshape" : "folder")
                         }
                     }
                 }
@@ -38,37 +39,32 @@ struct FoldersView: View {
             if !shownTracks.isEmpty {
                 Section {
                     ForEach(shownTracks) { track in
-                        TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url)
-                            .contentShape(Rectangle())
-                            .onTapGesture { player.play(track: track, context: trackFiles) }
-                            .swipeActions(edge: .trailing) {
-                                Button {
-                                    player.enqueue(track, context: trackFiles)
-                                } label: { Label("Enqueue", systemImage: "text.append") }
-                                .tint(player.accentColor)
-                            }
-                            .contextMenu {
-                                Button {
-                                    player.enqueue(track, context: trackFiles)
-                                } label: { Label("Add Track to Queue", systemImage: "text.append") }
-                            }
+                        MacTrackRow(track: track, context: trackFiles)
                     }
                 }
             }
         }
-        .listStyle(.plain)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter this folder")
-        .navigationTitle(directory == nil ? "Folders" : dir.lastPathComponent)
-        .navigationBarTitleDisplayMode(directory == nil ? .large : .inline)
+        .listStyle(.inset)
+        .searchable(text: $query, prompt: "Filter this folder")
+        .navigationTitle(directory?.lastPathComponent ?? "Folders")
         .overlay {
             if loaded, subfolders.isEmpty, trackFiles.isEmpty {
                 ContentUnavailableView("Empty Folder", systemImage: "folder")
             }
         }
-        .task(id: dir.path) { await load() }
+        .task(id: directory?.path ?? rootsKey) { await load() }
     }
 
+    /// Re-run the top-level listing when the set of library roots changes.
+    private var rootsKey: String { library.roots.map(\.path).joined(separator: "\u{1}") }
+
     private func load() async {
+        guard let dir = directory else {
+            subfolders = library.roots.map(\.url)
+            trackFiles = []
+            loaded = true
+            return
+        }
         let fm = FileManager.default
         let contents = (try? fm.contentsOfDirectory(
             at: dir,

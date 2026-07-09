@@ -1,7 +1,8 @@
 #!/bin/bash
-# Builds a lean audio-only FFmpeg (libav*) as an xcframework for iOS.
-# Slices: iOS-simulator arm64 and iOS-device arm64.
+# Builds a lean audio-only FFmpeg (libav*) as an xcframework for iOS + macOS.
+# Slices: iOS-simulator arm64, iOS-device arm64, macOS arm64.
 # Native opus/vorbis/mp3/aac/flac decoders — no external codec libraries.
+# Already-built slices under .ffmpeg-build are reused; delete one to force a rebuild.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +11,7 @@ SRC="$WORK/FFmpeg"
 OUT="$ROOT/Vendor/FFmpeg"          # xcframeworks land here
 FFMPEG_TAG="release/7.1"
 MINVER=17.0
+MACMINVER=14.0
 
 LIBS="libavcodec libavformat libavutil libswresample"
 
@@ -26,6 +28,11 @@ build_slice () {
   local prefix="$WORK/$name"
   local sdkpath
   sdkpath="$(xcrun --sdk "$sdk" --show-sdk-path)"
+
+  if [ -f "$prefix/lib/libavutil.a" ]; then
+    echo ">>> reusing slice: $name"
+    return
+  fi
 
   echo ">>> building slice: $name ($sdk / $arch)"
   cd "$SRC"
@@ -62,6 +69,7 @@ build_slice () {
 
 build_slice iphonesimulator arm64 "arm64-apple-ios${MINVER}-simulator" sim-arm64
 build_slice iphoneos          arm64 "arm64-apple-ios${MINVER}"           ios-arm64
+build_slice macosx            arm64 "arm64-apple-macos${MACMINVER}"      macos-arm64
 
 # --- assemble xcframeworks (one per lib, libraries only, no embedded headers) ---
 echo ">>> assembling xcframeworks"
@@ -71,6 +79,7 @@ for lib in $LIBS; do
   xcodebuild -create-xcframework \
     -library "$WORK/sim-arm64/lib/${lib}.a" \
     -library "$WORK/ios-arm64/lib/${lib}.a" \
+    -library "$WORK/macos-arm64/lib/${lib}.a" \
     -output "$OUT/${lib}.xcframework" >/dev/null
   echo "    $OUT/${lib}.xcframework"
 done

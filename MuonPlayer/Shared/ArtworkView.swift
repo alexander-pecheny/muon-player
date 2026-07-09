@@ -32,7 +32,7 @@ struct ArtworkView: View {
             .fill(Color.clear)
             .overlay {
                 if let image {
-                    Image(uiImage: image)
+                    Image(platformImage: image)
                         .resizable()
                         .scaledToFill()
                 } else {

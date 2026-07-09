@@ -1,19 +1,6 @@
 import SwiftUI
 
 /// A grouped search result set: matching artists (top), albums, then songs.
-struct SearchResults {
-    var artists: [ArtistResult] = []
-    var albums: [Album] = []
-    var songs: [Track] = []
-    var isEmpty: Bool { artists.isEmpty && albums.isEmpty && songs.isEmpty }
-}
-
-struct ArtistResult: Identifiable {
-    let name: String
-    let artworkPath: String?
-    var id: String { name }
-}
-
 /// The Home tab: a search bar over the whole library that returns artists,
 /// albums, and songs; when the query is empty it shows the latest additions to
 /// the library instead.

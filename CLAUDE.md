@@ -1,8 +1,29 @@
 # MuonPlayer — build / test / deploy notes
 
-iOS music player. SwiftUI + AVAudioEngine, gapless playback via a single player
-node, FFmpeg for decode/metadata, SQLite for the library. Bundle id
+iOS **and macOS** music player. SwiftUI + AVAudioEngine, gapless playback via a
+single player node, FFmpeg for decode/metadata, SQLite for the library. Bundle id
 `me.pecheny.muonplayer`.
+
+## Targets & code layout
+
+Two app targets share everything but the UI:
+
+| Path | Compiled into |
+|---|---|
+| `MuonPlayer/{Audio,Library,Models,Playback,Scanner,Scrobble,Shared,Resources}` | both |
+| `MuonPlayer/{Views,App,SelfTests}` | iOS only |
+| `MuonPlayerMac/` | macOS only |
+
+Anything reused by both UIs (`ArtworkView`, `WaveformSeekBar`, `DominantColor`,
+`TagEditModel`, `PlatformImage`) lives in `MuonPlayer/Shared/`. Put new shared
+code there, not in `Views/`.
+
+The library indexes a set of **root folders** (`LibraryRoot`). iOS has exactly
+one (Documents); macOS has however many the user adds, persisted as
+security-scoped bookmarks (`MuonPlayerMac/LibraryFolders.swift`). Folder-scoped
+DB queries match on a root's absolute canonical path prefix — which is why iOS
+still rewrites stored paths on launch (`normalizeContainerPaths`, the data
+container UUID changes on every install).
 
 ## Project generation (XcodeGen)
 
@@ -19,8 +40,10 @@ for targets/settings.
 ## Prerequisites (gitignored, must exist before first build)
 
 1. **FFmpeg xcframeworks** — `Vendor/FFmpeg/*.xcframework` (+ `include/module.modulemap`,
-   imported in Swift as `CFFmpeg`). `Vendor/` is committed, so usually already
-   present. Rebuild with `scripts/build-ffmpeg.sh` (a few minutes) if missing.
+   imported in Swift as `CFFmpeg`). Slices: `ios-arm64`, `ios-arm64-simulator`,
+   `macos-arm64`. `Vendor/` is committed, so usually already present. Rebuild with
+   `scripts/build-ffmpeg.sh` (a few minutes) if missing — it reuses any slice
+   already built under `.ffmpeg-build/`, so delete a slice dir to force it.
 2. **`MuonPlayer/Secrets.swift`** — `scripts/gen-secrets.sh` generates it from
    `.env` (Last.fm key/secret + username/password). Both `.env` and `Secrets.swift`
    are gitignored; a fresh checkout won't compile until this runs. Without valid
@@ -41,6 +64,28 @@ Tests use **Swift Testing** (`@Test`/`#expect`), not XCTest. The XCTest summary
 line prints `Executed 0 tests` — that's expected; the real results are the
 `✔ Test …` / `✔ Test run with N tests in M suites passed` lines (currently
 22 tests in 4 suites).
+
+## Build & run the Mac app
+
+```bash
+xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayerMac \
+  -configuration Debug -destination 'platform=macOS,arch=arm64' build
+
+open ~/Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/Debug/MuonPlayerMac.app
+```
+
+The Mac app is **sandboxed**: it can only read folders the user picked in the
+open panel (Library → Add Folder to Library…, ⌘O). Its container is
+`~/Library/Containers/me.pecheny.muonplayer/Data`.
+
+> ⚠️ That container's `Music`, `Movies`, `Pictures` and `Downloads` are symlinks
+> to the **real** home folders. Never write test fixtures there. Use
+> `Data/Library/Application Support/…`, which is container-private.
+
+`MacSelfTest` (env-gated by `MUON_MACTEST` + `MUON_MACTEST_FOLDER`) indexes a
+folder, plays its first track and writes `mactest.done` into Application Support.
+It sets `LibraryStore.roots` directly, bypassing the bookmark flow, so the folder
+must already be readable by the sandbox.
 
 ## Run in the simulator
 

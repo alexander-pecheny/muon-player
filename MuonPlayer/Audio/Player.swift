@@ -34,6 +34,16 @@ final class Player {
     }
     private static let modeKey = "playbackMode"
 
+    /// Output gain, 0…1. iOS defers to the system volume; macOS has no hardware
+    /// volume affordance inside the app, so the mixer carries it. Persisted.
+    var volume: Float = 1 {
+        didSet {
+            engine.mainMixerNode.outputVolume = volume
+            UserDefaults.standard.set(volume, forKey: Self.volumeKey)
+        }
+    }
+    private static let volumeKey = "outputVolume"
+
     /// Fired when a track begins playing (for "now playing" scrobble update).
     var onTrackStarted: ((Track) -> Void)?
     /// Fired when a track stops being the current track, with how long it played.
@@ -103,6 +113,10 @@ final class Player {
     private func setupEngine() {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: CanonicalAudio.format)
+        if let saved = UserDefaults.standard.object(forKey: Self.volumeKey) as? Float {
+            volume = saved
+        }
+        engine.mainMixerNode.outputVolume = volume
         engine.prepare()
     }
 
@@ -604,11 +618,3 @@ final class Player {
         captureFile = nil
     }
 }
-
-#if canImport(UIKit)
-import UIKit
-typealias PlatformImage = UIImage
-#else
-import AppKit
-typealias PlatformImage = NSImage
-#endif

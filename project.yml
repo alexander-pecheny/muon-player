@@ -3,10 +3,15 @@ options:
   bundleIdPrefix: me.pecheny
   deploymentTarget:
     iOS: "17.0"
+    macOS: "14.0"
   xcodeVersion: "16.0"
 settings:
   SWIFT_VERSION: "5.0"
   IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
+# Both apps share everything but the UI: MuonPlayer/{Audio,Library,Models,
+# Playback,Scanner,Scrobble,Shared} is compiled into each target, while
+# MuonPlayer/{Views,App,SelfTests} is iPhone-only and MuonPlayerMac/ is Mac-only.
 targets:
   MuonPlayer:
     type: application
@@ -53,6 +58,62 @@ targets:
         - -fmodule-map-file=$(SRCROOT)/Vendor/FFmpeg/include/module.modulemap
         - -Xcc
         - -I$(SRCROOT)/Vendor/FFmpeg/include
+  MuonPlayerMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: MuonPlayer
+        excludes:
+          - Info.plist
+          - Views          # iPhone UI
+          - App            # iPhone entry point (AVAudioSession)
+          - SelfTests      # simulator-only launch harnesses
+      - path: MuonPlayerMac
+    info:
+      path: MuonPlayerMac/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+        NSHumanReadableCopyright: ""
+    entitlements:
+      path: MuonPlayerMac/MuonPlayerMac.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        # Tag editing rewrites the user's own files in place, so read-only access
+        # to the chosen folders is not enough.
+        com.apple.security.files.user-selected.read-write: true
+        # Library folders are remembered across launches as security-scoped
+        # bookmarks; without this the sandbox grant dies with the process.
+        com.apple.security.files.bookmarks.app-scope: true
+        # Last.fm scrobbling.
+        com.apple.security.network.client: true
+    dependencies:
+      - framework: Vendor/FFmpeg/libavcodec.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libavformat.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libavutil.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libswresample.xcframework
+        embed: false
+      - sdk: libz.tbd
+      - sdk: libbz2.tbd
+      - sdk: libiconv.tbd
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: me.pecheny.muonplayer
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      ENABLE_HARDENED_RUNTIME: YES
+      HEADER_SEARCH_PATHS:
+        - $(SRCROOT)/Vendor/FFmpeg/include
+      OTHER_SWIFT_FLAGS:
+        - -Xcc
+        - -fmodule-map-file=$(SRCROOT)/Vendor/FFmpeg/include/module.modulemap
+        - -Xcc
+        - -I$(SRCROOT)/Vendor/FFmpeg/include
+
   MuonPlayerTests:
     type: bundle.unit-test
     platform: iOS

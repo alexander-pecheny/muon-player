@@ -389,10 +389,9 @@ actor Database {
         return readTracks(stmt)
     }
 
-    /// All tracks under a Documents-relative top folder (the artist folder).
-    /// Matched via `%/Documents/<folder>/%` so it's robust to `/var` vs
-    /// `/private/var` and to app-container UUID changes. Used by the playhead.
-    func tracks(underRelativeTopFolder folder: String) -> [Track] {
+    /// Every track anywhere beneath `folder` (an absolute, canonical path).
+    /// Used by the playhead for the artist-folder scope.
+    func tracks(underFolder folder: String) -> [Track] {
         let sql = """
         SELECT \(trackColumns) FROM tracks
         WHERE path LIKE ? ESCAPE '\\'
@@ -400,7 +399,7 @@ actor Database {
         """
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, "%/Documents/" + escapeLike(folder + "/") + "%")
+        bindText(stmt, 1, escapeLike(folder + "/") + "%")
         return readTracks(stmt)
     }
 
@@ -418,13 +417,10 @@ actor Database {
         return readTracks(stmt)
     }
 
-    /// Library tracks that are direct children of a Documents-relative folder
-    /// (used by the Folders browser). `rel` is "" for the Documents root. Matched
-    /// via `%/Documents/<rel>/…` so it's robust to `/var` vs `/private/var` and
-    /// container-UUID changes.
-    func tracks(inRelativeFolder rel: String) -> [Track] {
-        let base = rel.isEmpty ? "" : (rel.hasSuffix("/") ? rel : rel + "/")
-        let prefix = "%/Documents/" + escapeLike(base)
+    /// Library tracks that are *direct* children of `folder` (an absolute,
+    /// canonical path) — used by the Folders browser.
+    func tracks(directlyInFolder folder: String) -> [Track] {
+        let prefix = escapeLike(folder.hasSuffix("/") ? folder : folder + "/")
         let sql = """
         SELECT \(trackColumns) FROM tracks
         WHERE path LIKE ? ESCAPE '\\' AND path NOT LIKE ? ESCAPE '\\'

@@ -1,11 +1,6 @@
 import SwiftUI
 
 /// Navigation value for pushing an artist's album list.
-struct ArtistRef: Hashable, Identifiable {
-    let name: String
-    var id: String { name }
-}
-
 /// All albums grouped under one artist (album-artist), shown as a chronological
 /// grid (like the Albums tab), oldest first.
 struct ArtistView: View {
