@@ -65,6 +65,25 @@ add("Short EP", "a.flac", D[0], "flac", 900_000, "EP", "Band")
 add("Full EP", "a.flac", D[0], "flac", 900_000, "EP", "Band")
 add("Full EP", "b.flac", D[1], "flac", 900_000, "EP", "Band")
 
+# 6. A transcode: Opus prepends 312 samples of preskip to every track, so the
+#    copy is uniformly ~6.5ms longer. The reported durations round differently
+#    per track, hence the jitter. Must be caught — the formats differ.
+PRESKIP = 312 / 48_000
+for i, d in enumerate(D):
+    add("Preskip [FLAC]", f"{i}.flac", d, "flac", 900_000, "Preskip", "Band")
+    add("Preskip [Opus]", f"{i}.opus", d + PRESKIP + (i - 1) * 1e-5, "opus", 200_000, "Preskip", "Band")
+
+# 7. The same uniform offset between two copies in the *same* format is not an
+#    encoder delay — it is a different master. Must NOT be touched.
+for i, d in enumerate(D):
+    add("Uniform A [FLAC]", f"{i}.flac", d, "flac", 900_000, "Uniform", "Band")
+    add("Uniform B [FLAC]", f"{i}.flac", d + PRESKIP, "flac", 950_000, "Uniform", "Band")
+
+# 8. A shared offset far larger than any encoder delay — a different edit.
+for i, d in enumerate(D):
+    add("Edit [FLAC]", f"{i}.flac", d, "flac", 900_000, "Edit", "Band")
+    add("Edit [MP3]", f"{i}.mp3", d + 0.5, "mp3", 320_000, "Edit", "Band")
+
 con.commit()
 con.close()
 
@@ -93,6 +112,10 @@ ok &= check("multi-disc unit is the album folder, not a disc",
             any(d.endswith("Big [MP3]") for d in drops) and not any("Disc" in d for d in drops))
 ok &= check("keeps the FLAC multi-disc copy", any(k.endswith("Big [FLAC]") for k in keeps))
 ok &= check("ignores albums with different track counts", not any("EP" in d for d in drops))
+ok &= check("catches an Opus transcode despite its preskip", any("Preskip [Opus]" in d for d in drops))
+ok &= check("keeps the FLAC source of the transcode", not any("Preskip [FLAC]" in d for d in drops))
+ok &= check("leaves a same-format uniform offset alone", not any("Uniform" in d for d in drops))
+ok &= check("leaves a half-second shared offset alone", not any("Edit" in d for d in drops))
 ok &= check("nothing was actually deleted (dry run)", (root / "AAA lossy copy").exists())
 
 print("\nRESULT=" + ("PASS" if ok else "FAIL"))

@@ -3,11 +3,18 @@
 //  muon-dedup — remove redundant copies of albums from the music library.
 //
 //  Two folders hold the same album when they carry the same album-artist/album
-//  tags, the same number of tracks, and every track's duration matches to within
-//  a sample. That last rule is what makes this safe to automate: a remaster, a
-//  live take or a different edit will differ by far more than a sample, so it is
-//  never mistaken for the same recording. The lower-quality copy is removed and
+//  tags, the same number of tracks, and every track's duration lines up. That last
+//  rule is what makes this safe to automate: a remaster, a live take or a different
+//  edit shifts each track by its own amount. The lower-quality copy is removed and
 //  the better one kept.
+//
+//  "Lines up" means bit-identical lengths — to within a sample — for two copies in
+//  the same format. When the formats differ, one copy is a transcode of the other
+//  and is uniformly longer by the encoder's priming delay: Opus prepends 312
+//  samples of preskip, AAC 2112 of priming. So across formats the durations may
+//  differ by a *shared* offset (up to --max-offset-ms), as long as every track
+//  shares it (to within --offset-spread-ms). Two copies in the same format never
+//  get that latitude, so a uniformly-longer remaster is still never touched.
 //
 //  Nothing is deleted without --apply, and even then folders go to the Trash, so
 //  every decision is reversible.
@@ -16,7 +23,7 @@
 //    swift scripts/muon-dedup.swift                  # dry run (default)
 //    swift scripts/muon-dedup.swift --apply          # move losers to the Trash
 //    swift scripts/muon-dedup.swift --verbose        # show the kept copy too
-//    swift scripts/muon-dedup.swift --tolerance-samples 0
+//    swift scripts/muon-dedup.swift --max-offset-ms 0   # exact lengths only
 //    swift scripts/muon-dedup.swift --db /path/to/muon-library.sqlite
 //
 
@@ -34,11 +41,20 @@ struct Options {
     var rescueArt = false
     var toleranceSamples = 1.0
     var sampleRate = 44_100.0
+    /// Largest shared offset two differently-encoded copies may have, in ms. Zero
+    /// demands identical lengths of every copy, whatever its format.
+    var maxOffsetMs = 100.0
+    /// How much the per-track offsets of two differently-encoded copies may
+    /// disagree, in ms. A real encoder delay is constant to the sample; this only
+    /// absorbs the rounding in the durations the demuxers report.
+    var offsetSpreadMs = 2.0
     /// Directories that must never be trashed, whatever the grouping says.
     var protected: [String] = []
 
     /// Two durations are "the same" within this many seconds.
     var tolerance: TimeInterval { toleranceSamples / sampleRate }
+    var maxOffset: TimeInterval { maxOffsetMs / 1000 }
+    var offsetSpread: TimeInterval { offsetSpreadMs / 1000 }
 }
 
 func parseOptions() -> Options {
@@ -54,6 +70,8 @@ func parseOptions() -> Options {
         case "--db": o.db = it.next() ?? o.db
         case "--tolerance-samples": o.toleranceSamples = Double(it.next() ?? "") ?? o.toleranceSamples
         case "--sample-rate": o.sampleRate = Double(it.next() ?? "") ?? o.sampleRate
+        case "--max-offset-ms": o.maxOffsetMs = Double(it.next() ?? "") ?? o.maxOffsetMs
+        case "--offset-spread-ms": o.offsetSpreadMs = Double(it.next() ?? "") ?? o.offsetSpreadMs
         case "--protect": if let p = it.next() { o.protected.append(p) }
         case "--help", "-h":
             print("""
@@ -64,8 +82,10 @@ func parseOptions() -> Options {
               --verbose              also show which copy is kept
               --json                 emit the plan as JSON (implies dry run)
               --rescue-art           copy cover art the keeper lacks before trashing
-              --tolerance-samples N  duration match tolerance (default 1)
+              --tolerance-samples N  same-format duration match tolerance (default 1)
               --sample-rate N        samples per second for the tolerance (default 44100)
+              --max-offset-ms N      encoder delay allowed across formats (default 100, 0 disables)
+              --offset-spread-ms N   how much per-track offsets may disagree (default 2)
               --db PATH              library database
               --protect PATH         never trash this directory (repeatable)
             """)
@@ -98,6 +118,7 @@ struct AlbumCopy {
     let album: String
 
     var durations: [TimeInterval] { tracks.map(\.duration).sorted() }
+    var codecs: Set<String> { Set(tracks.map(\.codec)) }
     var isLossless: Bool { tracks.allSatisfy { Self.losslessCodecs.contains($0.codec) } }
     var averageBitrate: Double {
         let rates = tracks.map { Double($0.bitrate) }
@@ -165,10 +186,43 @@ func readTracks(db path: String) -> [Track] {
 typealias AlbumKey = String
 func key(_ artist: String, _ album: String) -> AlbumKey { artist + "\u{1}" + album }
 
-/// Sorted durations of the audio directly in each leaf folder under `dir`.
-func leafDurations(under dir: String, byLeaf: [String: [Track]]) -> [[TimeInterval]] {
+/// What it takes to decide whether two piles of audio are the same recordings:
+/// how long each track is, and what it was encoded with.
+struct Shape {
+    let durations: [TimeInterval]
+    let codecs: Set<String>
+}
+
+/// The rule for "these two hold the same recordings", and the only place the
+/// duration tolerances are interpreted.
+struct MatchRule {
+    let tolerance: TimeInterval
+    let maxOffset: TimeInterval
+    let spread: TimeInterval
+
+    /// Same track count, and the sorted durations line up.
+    ///
+    /// Copies sharing a format must agree to within `tolerance` — two rips of one
+    /// CD are the same length to the sample. Copies in *different* formats are a
+    /// transcode and its source, and a lossy encoder prepends the same priming
+    /// delay to every track, so they may differ by one shared offset instead.
+    /// Withholding that latitude from same-format pairs is what keeps a uniformly
+    /// longer remaster from being mistaken for a copy.
+    func sameRecordings(_ a: Shape, _ b: Shape) -> Bool {
+        guard a.durations.count == b.durations.count, !a.durations.isEmpty else { return false }
+        let deltas = zip(a.durations, b.durations).map { $0 - $1 }
+        let lo = deltas.min()!, hi = deltas.max()!
+
+        guard a.codecs != b.codecs, maxOffset > 0 else { return max(hi, -lo) <= tolerance }
+        return hi - lo <= spread && abs((lo + hi) / 2) <= maxOffset
+    }
+}
+
+/// The shape of the audio directly in each leaf folder under `dir`.
+func leafShapes(under dir: String, byLeaf: [String: [Track]]) -> [Shape] {
     byLeaf.compactMap { leaf, ts in
-        (leaf == dir || leaf.hasPrefix(dir + "/")) ? ts.map(\.duration).sorted() : nil
+        guard leaf == dir || leaf.hasPrefix(dir + "/") else { return nil }
+        return Shape(durations: ts.map(\.duration).sorted(), codecs: Set(ts.map(\.codec)))
     }
 }
 
@@ -184,20 +238,18 @@ func albumUnit(for directory: String,
                key wanted: AlbumKey,
                keysUnder: [String: Set<AlbumKey>],
                byLeaf: [String: [Track]],
-               tolerance: TimeInterval) -> String {
+               rule: MatchRule) -> String {
     var unit = directory
     while true {
         let parent = (unit as NSString).deletingLastPathComponent
         guard parent != unit, parent != "/", !parent.isEmpty else { return unit }
         guard let keys = keysUnder[parent], keys == [wanted] else { return unit }
 
-        let leaves = leafDurations(under: parent, byLeaf: byLeaf)
+        let leaves = leafShapes(under: parent, byLeaf: byLeaf)
         var holdsTwoCopies = false
         for i in leaves.indices {
             for j in leaves.indices where j > i {
-                let a = leaves[i], b = leaves[j]
-                guard a.count == b.count, !a.isEmpty else { continue }
-                if zip(a, b).allSatisfy({ abs($0 - $1) <= tolerance }) { holdsTwoCopies = true }
+                if rule.sameRecordings(leaves[i], leaves[j]) { holdsTwoCopies = true }
             }
         }
         if holdsTwoCopies { return unit }
@@ -205,7 +257,7 @@ func albumUnit(for directory: String,
     }
 }
 
-func buildCopies(_ tracks: [Track], tolerance: TimeInterval) -> [AlbumCopy] {
+func buildCopies(_ tracks: [Track], rule: MatchRule) -> [AlbumCopy] {
     // Untitled albums are not a single album — never fold them together.
     let usable = tracks.filter { !$0.album.isEmpty && !$0.albumArtist.isEmpty }
 
@@ -229,7 +281,7 @@ func buildCopies(_ tracks: [Track], tolerance: TimeInterval) -> [AlbumCopy] {
     for (leaf, ts) in byLeaf {
         guard let keys = keysUnder[leaf], keys.count == 1, let k = keys.first else { continue }
         let unit = albumUnit(for: leaf, key: k, keysUnder: keysUnder,
-                             byLeaf: byLeaf, tolerance: tolerance)
+                             byLeaf: byLeaf, rule: rule)
         unitTracks[unit, default: []].append(contentsOf: ts)
     }
 
@@ -240,12 +292,9 @@ func buildCopies(_ tracks: [Track], tolerance: TimeInterval) -> [AlbumCopy] {
     }
 }
 
-/// Do these two copies hold the same recordings? Same track count, and every
-/// duration lines up to within the tolerance once both are sorted.
-func isSameRecording(_ a: AlbumCopy, _ b: AlbumCopy, tolerance: TimeInterval) -> Bool {
-    let x = a.durations, y = b.durations
-    guard x.count == y.count, !x.isEmpty else { return false }
-    return zip(x, y).allSatisfy { abs($0 - $1) <= tolerance }
+func isSameRecording(_ a: AlbumCopy, _ b: AlbumCopy, rule: MatchRule) -> Bool {
+    rule.sameRecordings(Shape(durations: a.durations, codecs: a.codecs),
+                        Shape(durations: b.durations, codecs: b.codecs))
 }
 
 // MARK: - Filesystem
@@ -334,8 +383,11 @@ func rescueArt(from drop: String, to keep: String) -> [String] {
 // MARK: - Main
 
 let options = parseOptions()
+let rule = MatchRule(tolerance: options.tolerance,
+                     maxOffset: options.maxOffset,
+                     spread: options.offsetSpread)
 let tracks = readTracks(db: options.db)
-let copies = buildCopies(tracks, tolerance: options.tolerance)
+let copies = buildCopies(tracks, rule: rule)
 
 var byAlbum: [AlbumKey: [AlbumCopy]] = [:]
 for c in copies { byAlbum[key(c.albumArtist, c.album), default: []].append(c) }
@@ -358,7 +410,7 @@ for (_, group) in byAlbum where group.count > 1 {
         remaining.removeFirst()
         var cluster = [head]
         remaining.removeAll { candidate in
-            if isSameRecording(head, candidate, tolerance: options.tolerance) {
+            if isSameRecording(head, candidate, rule: rule) {
                 cluster.append(candidate)
                 return true
             }
@@ -390,6 +442,8 @@ if options.json {
     }
     let plan: [String: Any] = [
         "tolerance_seconds": options.tolerance,
+        "max_offset_seconds": options.maxOffset,
+        "offset_spread_seconds": options.offsetSpread,
         "removals": removals.map { r -> [String: Any] in
             ["album": r.drop.album, "album_artist": r.drop.albumArtist,
              "bytes": r.bytes, "files": r.files, "extra_files": r.extraFiles,
@@ -410,6 +464,10 @@ print(options.apply ? "muon-dedup — APPLYING (folders go to the Trash)" : "muo
 print("database: \(short(options.db))")
 print(String(format: "match rule: same album tags, same track count, every duration within %.1f sample(s) (%.1f µs)",
              options.toleranceSamples, options.tolerance * 1e6))
+if options.maxOffsetMs > 0 {
+    print(String(format: "            across formats, a shared offset up to %.0f ms (spread ≤ %.1f ms) is allowed",
+                 options.maxOffsetMs, options.offsetSpreadMs))
+}
 print("albums scanned: \(byAlbum.count), album copies on disk: \(copies.count)\n")
 
 if removals.isEmpty {
