@@ -15,14 +15,19 @@ import Foundation
 enum TextEncodingRepair {
 
     static func repair(_ s: String) -> String {
-        guard let bytes = latin1Bytes(of: s), looksLikeCyrillicMojibake(s, bytes) else { return s }
-        guard let candidate = String(bytes: bytes, encoding: .windowsCP1251),
-              !candidate.unicodeScalars.contains("\u{FFFD}") else { return s }
+        guard let bytes = latin1Bytes(of: s), looksLikeCyrillicMojibake(bytes) else { return s }
+        guard let candidate = String(bytes: bytes, encoding: .windowsCP1251) else { return s }
 
-        // Every non-ASCII letter must have become Cyrillic. If some byte decoded
-        // to a symbol or another script, this wasn't CP1251 text.
-        let highLetters = s.filter { $0.isLetter && !$0.isASCII }.count
-        guard candidate.filter(\.isCyrillic).count == highLetters else { return s }
+        // CP1251 is a single-byte code page, so the decode is one scalar per byte
+        // and the two line up. Every high byte must have become a Cyrillic letter,
+        // or punctuation the two code pages share («», the CP1251 apostrophe).
+        // Anything else — a Latin letter, another script — means this wasn't
+        // CP1251 text and the transform would corrupt it.
+        let decoded = Array(candidate.unicodeScalars)
+        guard decoded.count == bytes.count else { return s }
+        for (byte, scalar) in zip(bytes, decoded) where byte >= 0x80 {
+            guard scalar.isCyrillic || !scalar.properties.isAlphabetic else { return s }
+        }
         return candidate
     }
 
@@ -38,21 +43,26 @@ enum TextEncodingRepair {
         return bytes
     }
 
-    private static func looksLikeCyrillicMojibake(_ s: String, _ bytes: [UInt8]) -> Bool {
-        let letters = s.filter(\.isLetter)
-        let high = letters.filter { !$0.isASCII }
-        // Latin text sprinkles a few accents among ASCII letters ("Motörhead");
-        // mojibaked Cyrillic is almost entirely high bytes.
-        guard high.count >= 2, Double(high.count) / Double(letters.count) >= 0.6 else { return false }
+    /// Mojibaked Cyrillic arrives as whole words — unbroken runs of high bytes.
+    /// Latin text sprinkles accents one at a time among ASCII (`Motörhead`,
+    /// `Sigur Rós`), so a run of three tells the two apart without a dictionary.
+    ///
+    /// Counting *bytes* rather than letters matters: a `ч` mojibakes to `÷`, which
+    /// is a division sign, and a title like `Áîí÷ Áðó Áîí÷ @ VIP PARTY` is mostly
+    /// ASCII by letter count yet unmistakably Cyrillic by run length.
+    private static func looksLikeCyrillicMojibake(_ bytes: [UInt8]) -> Bool {
+        var run = 0
+        var longest = 0
+        for byte in bytes {
+            run = byte >= 0x80 ? run + 1 : 0
+            longest = max(longest, run)
+        }
         // CP1251 puts lowercase Cyrillic at 0xE0…0xFF. Requiring at least one
         // rejects all-caps Latin runs like "ÅÄÖ", whose bytes are all below 0xE0.
-        return bytes.contains { $0 >= 0xE0 }
+        return longest >= 3 && bytes.contains { $0 >= 0xE0 }
     }
 }
 
-private extension Character {
-    var isCyrillic: Bool {
-        guard let scalar = unicodeScalars.first, unicodeScalars.count == 1 else { return false }
-        return (0x0400...0x04FF).contains(scalar.value)
-    }
+private extension Unicode.Scalar {
+    var isCyrillic: Bool { (0x0400...0x04FF).contains(value) }
 }

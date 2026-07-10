@@ -12,8 +12,21 @@ struct TextEncodingRepairTests {
         ("Ìíå òàê ñòðàøíî çà òåáÿ", "Мне так страшно за тебя"),
         ("Òâîÿ ñåñòðà Ñàøè", "Твоя сестра Саши"),
         ("Êàæäûé èç íàñ", "Каждый из нас"),
+        // `ч` mojibakes to `÷`, a division sign rather than a letter.
+        ("Áîí÷ Áðó Áîí÷", "Бонч Бру Бонч"),
+        ("Ñ.Ä. Äîâëàòîâ. Êðàòêàÿ Áèîãðàôè÷åñêàÿ Ñïðàâêà",
+         "С.Д. Довлатов. Краткая Биографическая Справка"),
     ])
     func repairsMojibake(input: String, expected: String) {
+        #expect(TextEncodingRepair.repair(input) == expected)
+    }
+
+    /// Cyrillic runs stay recognisable even when ASCII words outnumber them.
+    @Test("Repairs Cyrillic diluted by ASCII", arguments: [
+        ("Áîí÷ Áðó Áîí÷ @ VIP PARTY", "Бонч Бру Бонч @ VIP PARTY"),
+        ("Áîí÷ Áðó Áîí÷ @ Ãîâîðÿò (Ñá. Îì-Ðàäèî)", "Бонч Бру Бонч @ Говорят (Сб. Ом-Радио)"),
+    ])
+    func repairsDilutedMojibake(input: String, expected: String) {
         #expect(TextEncodingRepair.repair(input) == expected)
     }
 
@@ -27,6 +40,10 @@ struct TextEncodingRepairTests {
         "ÅÄÖ",                      // all-caps accents: bytes all below 0xE0
         "",
         "東京",                      // non-Latin, non-Cyrillic
+        "Tiësto",                   // isolated accents never form a run of three
+        "Zoë & Naïve Café",
+        "Þórir",
+        "AC/DC — Live 1979",
     ])
     func leavesGoodTextAlone(input: String) {
         #expect(TextEncodingRepair.repair(input) == input)
