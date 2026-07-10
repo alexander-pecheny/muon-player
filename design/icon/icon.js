@@ -42,7 +42,7 @@ export const RANGES = [
 // Set inner == mid == outer for a flat tint; set `grain` to 0 for no texture.
 export const COLORS = [
   ["inner", "Gradient inner", "#fff715"],
-  ["mid",   "Gradient mid",   "#ff23a7"],
+  ["mid",   "Gradient mid",   "#ff3e8a"],
   ["outer", "Gradient outer", "#f841ff"],
   ["bg",    "Background",     "#010020"],
   ["frame", "Driver ring",    "#010020"],
