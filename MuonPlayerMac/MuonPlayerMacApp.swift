@@ -64,6 +64,11 @@ struct MuonCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {}
 
+        CommandGroup(after: .textEditing) {
+            Button("Find") { router.focusSearch() }
+                .keyboardShortcut("f", modifiers: .command)
+        }
+
         CommandMenu("Playback") {
             Button(player.isPlaying ? "Pause" : "Play") { player.togglePlayPause() }
                 .keyboardShortcut("p", modifiers: .command)

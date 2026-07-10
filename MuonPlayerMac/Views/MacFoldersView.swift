@@ -11,24 +11,14 @@ struct MacFoldersView: View {
     @State private var subfolders: [URL] = []
     @State private var trackFiles: [Track] = []
     @State private var loaded = false
-    @State private var query = ""
 
     private var isRoot: Bool { directory == nil }
 
-    private var shownFolders: [URL] {
-        guard !query.isEmpty else { return subfolders }
-        return subfolders.filter { $0.lastPathComponent.localizedCaseInsensitiveContains(query) }
-    }
-    private var shownTracks: [Track] {
-        guard !query.isEmpty else { return trackFiles }
-        return trackFiles.filter { $0.title.localizedCaseInsensitiveContains(query) }
-    }
-
     var body: some View {
         List {
-            if !shownFolders.isEmpty {
+            if !subfolders.isEmpty {
                 Section {
-                    ForEach(shownFolders, id: \.path) { folder in
+                    ForEach(subfolders, id: \.path) { folder in
                         NavigationLink(value: FolderRef(url: folder)) {
                             Label(folder.lastPathComponent,
                                   systemImage: isRoot ? "folder.badge.gearshape" : "folder")
@@ -37,16 +27,15 @@ struct MacFoldersView: View {
                     }
                 }
             }
-            if !shownTracks.isEmpty {
+            if !trackFiles.isEmpty {
                 Section {
-                    ForEach(shownTracks) { track in
+                    ForEach(trackFiles) { track in
                         MacTrackRow(track: track, context: trackFiles, showFolder: false)
                     }
                 }
             }
         }
         .listStyle(.inset)
-        .searchable(text: $query, prompt: "Filter this folder")
         .navigationTitle(directory?.lastPathComponent ?? "Folders")
         .overlay {
             if loaded, subfolders.isEmpty, trackFiles.isEmpty {

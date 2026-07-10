@@ -38,11 +38,26 @@ final class MacRouter {
     var showNowPlaying = false
     var showQueue = false
 
+    /// The always-visible omni-search query. Lives here, not in a view, so it
+    /// survives section switches and the field stays in the toolbar everywhere.
+    var searchQuery = ""
+
+    /// Bumped by the ⌘F menu command; the toolbar field watches it to grab focus
+    /// (a Commands scene can't reach a view's `@FocusState` directly).
+    var searchFocusToken = 0
+    func focusSearch() { searchFocusToken += 1 }
+
     private var paths: [Section: NavigationPath] = [:]
 
     var path: Binding<NavigationPath> {
         Binding(get: { self.paths[self.section] ?? NavigationPath() },
                 set: { self.paths[self.section] = $0 })
+    }
+
+    /// Pop the current section back to its root, so a search typed while drilled
+    /// into an album lands on the results rather than staying hidden behind it.
+    func popToRoot() {
+        paths[section] = NavigationPath()
     }
 
     private func push<V: Hashable>(_ value: V) {
