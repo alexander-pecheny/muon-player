@@ -32,7 +32,7 @@ export const RANGES = [
   ["driverFrac", "Driver size",   0.3,  1.3, 0.01, 1.3,  2],
   ["gapL",       "Driver gap (muo)", -40, 140, 1,   6,   0],
   ["gapR",       "Driver gap (n)",  -40, 140, 1,  -27,   0],
-  ["artScale",   "Overall size",  0.3,  1.6, 0.01, 1.28, 2],
+  ["artScale",   "Overall size",  0.3,  1.6, 0.01, 1.2,  2],
   ["gradMid",    "Gradient midpoint", 0.05, 0.95, 0.01, 0.55, 2],
   ["gradReach",  "Gradient reach",  0.3,  1.6, 0.01, 1.0,  2],
   ["grain",      "Grain",           0,      1, 0.01, 0,    2],
