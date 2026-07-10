@@ -125,19 +125,26 @@ prints `width_points`/`height_points`.
 
 ## Deploy to a physical iPhone
 
-Device UDID for `xcodebuild` comes from `xctrace`/`-showdestinations`, **not**
-`devicectl` (they differ). Signing team is `B5T934YFU5` (personal team,
-ap@pecheny.me); automatic signing.
+`xcodebuild` and `devicectl` name the same phone by **different ids**, and neither
+can be grepped out of the plain-text listings by device name (the phone is called
+`pecheny17`, so `grep -i iphone` finds nothing). Take both from one JSON dump —
+`udid` is what `-destination` wants, `identifier` is what `devicectl` wants.
+Signing team is `B5T934YFU5` (personal team, ap@pecheny.me); automatic signing.
 
 ```bash
-DEV_UDID=$(xcrun xctrace list devices 2>&1 | grep -v Simulator | grep -i iphone | grep -oE '\([0-9A-F-]{25,}\)' | tr -d '()' | head -1)
+xcrun devicectl list devices --json-output /tmp/dev.json >/dev/null
+eval "$(python3 -c "
+import json
+p = [d for d in json.load(open('/tmp/dev.json'))['result']['devices']
+     if d['hardwareProperties']['platform'] == 'iOS'][0]
+print(f\"DEV_UDID={p['hardwareProperties']['udid']}; DEV_ID={p['identifier']}\")")"
+
 xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer -configuration Debug \
   -destination "platform=iOS,id=$DEV_UDID" \
   -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=B5T934YFU5 build
 
-# install (devicectl uses its OWN device id — `xcrun devicectl list devices`)
 APP=$(find ~/Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/Debug-iphoneos -maxdepth 1 -name MuonPlayer.app | head -1)
-xcrun devicectl device install app --device "$(xcrun devicectl list devices | grep -i 'iphone' | grep connected | awk '{print $3}')" "$APP"
+xcrun devicectl device install app --device "$DEV_ID" "$APP"
 ```
 
 ## Library maintenance
@@ -145,9 +152,16 @@ xcrun devicectl device install app --device "$(xcrun devicectl list devices | gr
 `scripts/muon-dedup.swift` removes redundant copies of an album, keeping the
 best-quality one. It reads the Mac app's SQLite library (no FFmpeg needed) and
 treats two folders as the same album only when the tags agree, the track counts
-agree, and every duration matches **to within one sample** — a remaster or a
-different edit differs by tens of milliseconds, which is why that rule is safe to
-automate.
+agree, and every duration lines up.
+
+"Lines up" depends on the formats. Two copies **in the same format** must match
+to within one sample. Two copies in **different** formats are a transcode and its
+source, and a lossy encoder prepends the same priming delay to every track (Opus
+312 samples ≈ 6.5 ms, AAC 2112), so they may differ by a *shared* offset — up to
+`--max-offset-ms` (100), with the per-track offsets agreeing to within
+`--offset-spread-ms` (2). Withholding that latitude from same-format pairs is what
+keeps a uniformly-longer remaster from being read as a copy; `--max-offset-ms 0`
+restores the old exact-lengths-only rule.
 
 ```bash
 swift scripts/muon-dedup.swift                     # dry run (default)
@@ -159,6 +173,19 @@ Multi-disc releases collapse to the album folder (discs are kept or dropped
 together); two sibling rips do not, since they are what we compare. Deletions go
 to the Trash, and `--rescue-art` copies any cover the survivor lacks before the
 loser is removed.
+
+`scripts/muon-albumartist.swift` folds a family of album-artist strings into one,
+so that "SOULOUD feat. X" and "SOULOUD, Y" stop splitting a discography into an
+entry per collaborator. It rewrites `album_artist` in the files (the per-track
+`artist` tag is left alone) and so must be compiled against the app's TagWriter,
+which edits tags in place without re-encoding:
+
+```bash
+swiftc -O scripts/muon-albumartist.swift MuonPlayer/Library/TagWriter.swift \
+  -o /tmp/muon-albumartist
+/tmp/muon-albumartist --prefix SOULOUD             # dry run (default)
+/tmp/muon-albumartist --prefix SOULOUD --apply
+```
 
 `scripts/muon-cloud-sync.swift` re-encodes any FLAC that is not 16-bit (halving
 the rate inside its own family: 96k→48k, 88.2k→44.1k) and uploads whatever the
