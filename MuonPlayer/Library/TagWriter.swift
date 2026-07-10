@@ -17,28 +17,58 @@ enum TagWriter {
         }
     }
 
+    /// Extensions we are willing to touch. Which writer runs is decided by the
+    /// bytes, not by this — `.aac` is raw ADTS about as often as it is MP4, and
+    /// either way it takes an ID3v2 tag.
+    private static let editableExtensions: Set<String> =
+        ["m4a", "mp4", "aac", "alac", "m4b", "mp3", "flac", "ogg", "oga", "opus",
+         "wav", "aif", "aiff", "ape", "wv"]
+
+    private enum Container { case mp4, id3, flac, ogg, wav, aiff, ape }
+
     static func write(_ edits: TagEdits, to url: URL) throws {
         let ext = url.pathExtension.lowercased()
+        guard editableExtensions.contains(ext) else { throw TagError.unsupportedFormat(ext) }
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard let container = sniff(data) else {
+            throw TagError.malformed("not a recognisable audio container")
+        }
         let out: Data
-        switch ext {
-        case "m4a", "mp4", "aac", "alac", "m4b":
-            out = try MP4.write(edits, into: data)
-        case "mp3":
-            out = try ID3.write(edits, into: data)
-        case "flac":
-            out = try FLAC.write(edits, into: data)
-        case "ogg", "oga", "opus":
-            out = try Ogg.write(edits, into: data)
-        default:
-            throw TagError.unsupportedFormat(ext)
+        switch container {
+        case .mp4:  out = try MP4.write(edits, into: data)
+        case .id3:  out = try ID3.write(edits, into: data)
+        case .flac: out = try FLAC.write(edits, into: data)
+        case .ogg:  out = try Ogg.write(edits, into: data)
+        case .wav:  out = try WAV.write(edits, into: data)
+        case .aiff: out = try AIFF.write(edits, into: data)
+        case .ape:  out = try APE.write(edits, into: data)
         }
         try writeAtomically(out, to: url)
     }
 
-    /// Whether this file type can currently be edited.
+    /// Whether this file can currently be edited.
     static func isSupported(_ url: URL) -> Bool {
-        ["m4a", "mp4", "aac", "alac", "m4b", "mp3", "flac", "ogg", "oga", "opus"].contains(url.pathExtension.lowercased())
+        guard editableExtensions.contains(url.pathExtension.lowercased()),
+              let h = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? h.close() }
+        return sniff((try? h.read(upToCount: 12)) ?? Data()) != nil
+    }
+
+    private static func sniff(_ d: Data) -> Container? {
+        let s = d.startIndex
+        func magic(_ m: String, at off: Int) -> Bool {
+            d.count >= off + m.count && d[s + off ..< s + off + m.count].elementsEqual(m.utf8)
+        }
+        if magic("ftyp", at: 4) { return .mp4 }
+        if magic("fLaC", at: 0) { return .flac }
+        if magic("OggS", at: 0) { return .ogg }
+        if magic("RIFF", at: 0) && magic("WAVE", at: 8) { return .wav }
+        if magic("FORM", at: 0) && (magic("AIFF", at: 8) || magic("AIFC", at: 8)) { return .aiff }
+        if magic("wvpk", at: 0) || magic("MAC ", at: 0) { return .ape }
+        if magic("ID3", at: 0) { return .id3 }
+        // Bare MPEG/ADTS frame sync — an ID3v2 tag gets prepended.
+        if d.count >= 2, d[s] == 0xFF, d[s + 1] & 0xE0 == 0xE0 { return .id3 }
+        return nil
     }
 
     private static func writeAtomically(_ data: Data, to url: URL) throws {
@@ -304,17 +334,21 @@ private enum MP4 {
 private enum ID3 {
     struct Frame { var id: String; var content: Data }
 
-    static func write(_ edits: TagEdits, into file: Data) throws -> Data {
-        var frames: [Frame] = []
-        var audioStart = file.startIndex
+    /// Length of the ID3v2 tag at the head of `d`, or nil if there isn't one.
+    /// The 10-byte header size is syncsafe in every version.
+    static func tagLength(_ d: Data) -> Int? {
+        guard d.count > 10, str(d, 0, 3) == "ID3" else { return nil }
+        return min(10 + syncsafe(d, 6), d.count)
+    }
 
-        // Existing ID3v2 tag? The 10-byte header size is syncsafe in every
-        // version; per-frame sizes are plain uint32 in v2.3 but syncsafe in v2.4.
-        if file.count > 10, str(file, 0, 3) == "ID3" {
-            let major = file[file.startIndex + 3]
-            let size = syncsafe(file, 6)
-            audioStart = min(file.startIndex + 10 + size, file.endIndex)
-            parseFrames(file, from: file.startIndex + 10, to: audioStart,
+    /// A clean ID3v2.4 tag carrying `edits` merged over the frames of `existing`
+    /// (itself a whole ID3v2 tag, of any version, or nil).
+    static func tag(_ edits: TagEdits, mergedInto existing: Data?) -> Data {
+        var frames: [Frame] = []
+        if let e = existing, let len = tagLength(e) {
+            // Per-frame sizes are plain uint32 in v2.3 but syncsafe in v2.4.
+            let major = e[e.startIndex + 3]
+            parseFrames(e, from: e.startIndex + 10, to: e.startIndex + len,
                         syncsafeFrames: major >= 4, into: &frames)
         }
 
@@ -332,8 +366,7 @@ private enum ID3 {
             set(&frames, "TDRC", String(year))
         }
 
-        // Emit as a clean ID3v2.4 tag (syncsafe frame sizes, UTF-8 for edits;
-        // preserved frames keep their own encoding byte and content).
+        // Preserved frames keep their own encoding byte and content.
         var body = Data()
         for f in frames where !f.content.isEmpty {
             body.append(f.id.data(using: .ascii) ?? Data([0, 0, 0, 0]))
@@ -346,10 +379,15 @@ private enum ID3 {
         tag.append(contentsOf: [4, 0, 0])                 // v2.4.0, no flags
         tag.append(contentsOf: encodeSyncsafe(body.count))
         tag.append(body)
+        return tag
+    }
 
-        var out = Data()
-        out.append(tag)
-        out.append(file.subdata(in: audioStart ..< file.endIndex))
+    /// MP3 and raw ADTS: the tag lives at the head of the file.
+    static func write(_ edits: TagEdits, into file: Data) throws -> Data {
+        let len = tagLength(file) ?? 0
+        let existing = len > 0 ? file.subdata(in: file.startIndex ..< file.startIndex + len) : nil
+        var out = tag(edits, mergedInto: existing)
+        out.append(file.subdata(in: file.startIndex + len ..< file.endIndex))
         return out
     }
 
@@ -392,6 +430,267 @@ private enum ID3 {
     private static func str(_ data: Data, _ offset: Int, _ len: Int) -> String {
         let s = data.startIndex + offset
         return String(bytes: data[s ..< s + len], encoding: .isoLatin1) ?? ""
+    }
+}
+
+// MARK: - IFF chunks (shared by RIFF/WAVE and AIFF)
+
+/// `RIFF`/`FORM` differ only in the byte order of their size fields. Chunks are
+/// padded to an even length, and the pad byte is not counted in the size.
+private enum IFF {
+    struct Chunk { var id: String; var data: Data }
+
+    static func parse(_ file: Data, bigEndian: Bool) throws -> (magic: String, form: String, chunks: [Chunk]) {
+        guard file.count >= 12 else { throw TagWriter.TagError.malformed("truncated IFF header") }
+        let s = file.startIndex
+        var chunks: [Chunk] = []
+        var i = s + 12
+        while i + 8 <= file.endIndex {
+            let id = String(bytes: file[i ..< i + 4], encoding: .isoLatin1) ?? ""
+            let size = u32(file, i + 4, bigEndian)
+            guard size >= 0, i + 8 + size <= file.endIndex else {
+                throw TagWriter.TagError.malformed("truncated IFF chunk \(id)")
+            }
+            chunks.append(Chunk(id: id, data: file.subdata(in: i + 8 ..< i + 8 + size)))
+            i += 8 + size + (size & 1)
+        }
+        return (String(bytes: file[s ..< s + 4], encoding: .isoLatin1) ?? "",
+                String(bytes: file[s + 8 ..< s + 12], encoding: .isoLatin1) ?? "",
+                chunks)
+    }
+
+    static func build(magic: String, form: String, chunks: [Chunk], bigEndian: Bool) -> Data {
+        var body = Data(form.utf8)
+        for c in chunks {
+            body.append(Data(c.id.utf8))
+            body.append(contentsOf: u32Bytes(c.data.count, bigEndian))
+            body.append(c.data)
+            if c.data.count & 1 == 1 { body.append(0) }
+        }
+        var out = Data(magic.utf8)
+        out.append(contentsOf: u32Bytes(body.count, bigEndian))
+        out.append(body)
+        return out
+    }
+
+    static func set(_ chunks: inout [Chunk], _ id: String, _ data: Data) {
+        if let i = chunks.firstIndex(where: { $0.id == id }) { chunks[i].data = data }
+        else { chunks.append(Chunk(id: id, data: data)) }
+    }
+
+    static func u32(_ d: Data, _ off: Int, _ bigEndian: Bool) -> Int {
+        let b = (0..<4).map { Int(d[off + $0]) }
+        return bigEndian ? b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]
+                         : b[3] << 24 | b[2] << 16 | b[1] << 8 | b[0]
+    }
+    static func u32Bytes(_ n: Int, _ bigEndian: Bool) -> [UInt8] {
+        let b = [UInt8((n >> 24) & 0xFF), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)]
+        return bigEndian ? b : b.reversed()
+    }
+}
+
+// MARK: - WAV (RIFF)
+
+/// Tags go in an `id3 ` chunk, which carries every field. The legacy `LIST`/`INFO`
+/// entries are updated in step, because FFmpeg reads both and the native chunk
+/// wins on a duplicate key — a stale `INAM` would silently outrank the new title.
+private enum WAV {
+    /// The RIFF INFO ids FFmpeg maps to our fields. `INFO` has no album-artist
+    /// or composer id, so those live only in the ID3 chunk.
+    static func infoIDs(_ e: TagEdits) -> [(String, String)] {
+        var m: [(String, String)] = []
+        if let v = e.title { m.append(("INAM", v)) }
+        if let v = e.artist { m.append(("IART", v)) }
+        if let v = e.album { m.append(("IPRD", v)) }
+        if let v = e.trackNo { m.append(("ITRK", String(v))) }
+        if let v = e.year { m.append(("ICRD", String(v))) }
+        return m
+    }
+
+    static func write(_ edits: TagEdits, into file: Data) throws -> Data {
+        var (magic, form, chunks) = try IFF.parse(file, bigEndian: false)
+        guard form == "WAVE" else { throw TagWriter.TagError.malformed("not a WAVE file") }
+
+        let old = chunks.first { $0.id == "id3 " || $0.id == "ID3 " }?.data
+        chunks.removeAll { $0.id == "ID3 " }
+        IFF.set(&chunks, "id3 ", ID3.tag(edits, mergedInto: old))
+
+        let edited = infoIDs(edits)
+        if !edited.isEmpty {
+            var info = chunks.firstIndex { $0.id == "LIST" && $0.data.prefix(4).elementsEqual("INFO".utf8) }
+                .map { parseINFO(chunks[$0].data) } ?? []
+            for (id, value) in edited {
+                info.removeAll { $0.id == id }
+                info.append(IFF.Chunk(id: id, data: Data(value.utf8) + Data([0])))
+            }
+            let rebuilt = IFF.build(magic: "LIST", form: "INFO", chunks: info, bigEndian: false).dropFirst(8)
+            chunks.removeAll { $0.id == "LIST" && $0.data.prefix(4).elementsEqual("INFO".utf8) }
+            chunks.append(IFF.Chunk(id: "LIST", data: Data(rebuilt)))
+        }
+        return IFF.build(magic: magic, form: form, chunks: chunks, bigEndian: false)
+    }
+
+    private static func parseINFO(_ d: Data) -> [IFF.Chunk] {
+        var out: [IFF.Chunk] = []
+        var i = d.startIndex + 4                              // skip "INFO"
+        while i + 8 <= d.endIndex {
+            let id = String(bytes: d[i ..< i + 4], encoding: .isoLatin1) ?? ""
+            let size = IFF.u32(d, i + 4, false)
+            guard size >= 0, i + 8 + size <= d.endIndex else { break }
+            out.append(IFF.Chunk(id: id, data: d.subdata(in: i + 8 ..< i + 8 + size)))
+            i += 8 + size + (size & 1)
+        }
+        return out
+    }
+}
+
+// MARK: - AIFF
+
+/// Same story as WAV: an `ID3 ` chunk holds everything, and the native `NAME` /
+/// `AUTH` text chunks are kept in step so neither can contradict it.
+private enum AIFF {
+    static func write(_ edits: TagEdits, into file: Data) throws -> Data {
+        var (magic, form, chunks) = try IFF.parse(file, bigEndian: true)
+        guard form == "AIFF" || form == "AIFC" else { throw TagWriter.TagError.malformed("not an AIFF file") }
+
+        let old = chunks.first { $0.id == "ID3 " || $0.id == "id3 " }?.data
+        chunks.removeAll { $0.id == "id3 " }
+        IFF.set(&chunks, "ID3 ", ID3.tag(edits, mergedInto: old))
+
+        if let t = edits.title { IFF.set(&chunks, "NAME", Data(t.utf8)) }
+        if let a = edits.artist { IFF.set(&chunks, "AUTH", Data(a.utf8)) }
+        return IFF.build(magic: magic, form: form, chunks: chunks, bigEndian: true)
+    }
+}
+
+// MARK: - APEv2 (Monkey's Audio and WavPack)
+
+/// A flat key/value block appended to the file, optionally behind a trailing
+/// 128-byte ID3v1 tag. Sizes are little-endian; the size in the footer counts
+/// the items plus the footer, but never the header.
+private enum APE {
+    private static let preamble = "APETAGEX"
+    private static let hasHeader: UInt32 = 0x8000_0000
+    private static let isHeader: UInt32 = 0x4000_0000
+
+    static func write(_ edits: TagEdits, into file: Data) throws -> Data {
+        var end = file.endIndex
+        var id3v1: Data?
+        if file.count >= 128, str(file, file.endIndex - 128, 3) == "TAG" {
+            id3v1 = file.subdata(in: file.endIndex - 128 ..< file.endIndex)
+            end -= 128
+        }
+
+        var items: [(String, String)] = []
+        var tagStart = end
+        if end - file.startIndex >= 32, str(file, end - 32, 8) == preamble {
+            let size = Int(le32(file, end - 32 + 12))
+            let flags = le32(file, end - 32 + 20)
+            guard size >= 32, end - size >= file.startIndex else {
+                throw TagWriter.TagError.malformed("bad APE footer")
+            }
+            items = parseItems(file, from: end - size, to: end - 32)
+            tagStart = end - size - (flags & hasHeader != 0 ? 32 : 0)
+            guard tagStart >= file.startIndex else { throw TagWriter.TagError.malformed("bad APE header") }
+        }
+
+        if let id3v1 { absorb(id3v1, into: &items) }
+
+        func set(_ key: String, _ value: String?) {
+            guard let value else { return }
+            items.removeAll { $0.0.caseInsensitiveCompare(key) == .orderedSame }
+            items.append((key, value))
+        }
+        set("Title", edits.title)
+        set("Artist", edits.artist)
+        set("Album", edits.album)
+        set("Album Artist", edits.albumArtist)
+        set("Composer", edits.composer)
+        set("Track", edits.trackNo.map(String.init))
+        set("Year", edits.year.map(String.init))
+
+        var out = file.subdata(in: file.startIndex ..< tagStart)
+        out.append(buildTag(items))
+        return out
+    }
+
+    /// FFmpeg looks for the APE footer only at the exact end of the file, so an
+    /// ID3v1 block parked behind the tag hides all of it. Fold the legacy fields
+    /// in (they lose to anything the APE tag already has) and drop the block, so
+    /// the UTF-8 APE tag ends the file and is the only truth. The numeric genre
+    /// byte is the one field not carried across.
+    private static func absorb(_ v1: Data, into items: inout [(String, String)]) {
+        let s = v1.startIndex
+        func text(_ off: Int, _ len: Int) -> String? {
+            let raw = v1[s + off ..< s + off + len].prefix { $0 != 0 }
+            let t = String(bytes: raw, encoding: .isoLatin1)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty ?? true) ? nil : t
+        }
+        func add(_ key: String, _ value: String?) {
+            guard let value,
+                  !items.contains(where: { $0.0.caseInsensitiveCompare(key) == .orderedSame })
+            else { return }
+            items.append((key, value))
+        }
+        add("Title", text(3, 30))
+        add("Artist", text(33, 30))
+        add("Album", text(63, 30))
+        add("Year", text(93, 4))
+        // ID3v1.1 steals the last two comment bytes for the track number.
+        let v11 = v1[s + 125] == 0 && v1[s + 126] != 0
+        add("Comment", text(97, v11 ? 28 : 30))
+        if v11 { add("Track", String(v1[s + 126])) }
+    }
+
+    private static func parseItems(_ d: Data, from: Int, to: Int) -> [(String, String)] {
+        var out: [(String, String)] = []
+        var i = from
+        while i + 8 < to {
+            let size = Int(le32(d, i))
+            i += 8                                            // value size + item flags
+            guard let nul = d[i ..< to].firstIndex(of: 0) else { break }
+            let key = String(bytes: d[i ..< nul], encoding: .utf8) ?? ""
+            i = nul + 1
+            guard size >= 0, i + size <= to else { break }
+            out.append((key, String(bytes: d[i ..< i + size], encoding: .utf8) ?? ""))
+            i += size
+        }
+        return out
+    }
+
+    private static func buildTag(_ items: [(String, String)]) -> Data {
+        var body = Data()
+        for (key, value) in items where !value.isEmpty {
+            let v = Data(value.utf8)
+            body.append(contentsOf: le32Bytes(UInt32(v.count)))
+            body.append(contentsOf: le32Bytes(0))             // UTF-8 text item
+            body.append(Data(key.utf8)); body.append(0)
+            body.append(v)
+        }
+        func block(_ flags: UInt32) -> Data {
+            var d = Data(preamble.utf8)
+            d.append(contentsOf: le32Bytes(2000))             // APEv2
+            d.append(contentsOf: le32Bytes(UInt32(body.count + 32)))
+            d.append(contentsOf: le32Bytes(UInt32(items.filter { !$0.1.isEmpty }.count)))
+            d.append(contentsOf: le32Bytes(flags))
+            d.append(Data(repeating: 0, count: 8))            // reserved
+            return d
+        }
+        var out = block(hasHeader | isHeader)
+        out.append(body)
+        out.append(block(hasHeader))
+        return out
+    }
+
+    private static func str(_ d: Data, _ off: Int, _ n: Int) -> String {
+        String(bytes: d[off ..< off + n], encoding: .isoLatin1) ?? ""
+    }
+    private static func le32(_ d: Data, _ off: Int) -> UInt32 {
+        (0..<4).reduce(UInt32(0)) { $0 | UInt32(d[off + $1]) << (8 * UInt32($1)) }
+    }
+    private static func le32Bytes(_ v: UInt32) -> [UInt8] {
+        (0..<4).map { UInt8((v >> (8 * $0)) & 0xFF) }
     }
 }
 
@@ -550,7 +849,15 @@ private enum Ogg {
                 buf.append(page.data[p ..< p + len]); p += len
                 if len < 255 {
                     packets.append(buf); buf = Data()
-                    if packets.count == headerPacketCount { audioPageStart = idx + 1; break outer }
+                    if packets.count == headerPacketCount {
+                        // The last header packet must end its page; otherwise the
+                        // audio packets sharing that page would be dropped below.
+                        guard p == page.data.endIndex else {
+                            throw TagWriter.TagError.malformed("audio shares a page with the Ogg headers")
+                        }
+                        audioPageStart = idx + 1
+                        break outer
+                    }
                 }
             }
         }
@@ -610,30 +917,32 @@ private enum Ogg {
     }
 
     /// Paginate header packets into pages (granule 0, BOS on the first).
+    ///
+    /// Each header packet gets its own page(s). Sharing a page is legal Ogg
+    /// framing but illegal for both codecs: the identification header must be
+    /// alone on the BOS page, and a demuxer that finds a second packet there
+    /// reads it as another `OpusHead` and rejects the stream.
     private static func paginate(_ packets: [Data], serial: UInt32) -> [Data] {
-        var lacings: [UInt8] = []
-        var payload = Data()
+        var out: [Data] = []
+        var seq: UInt32 = 0
         for pkt in packets {
+            var lacings: [UInt8] = []
             var l = pkt.count
             while l >= 255 { lacings.append(255); l -= 255 }
             lacings.append(UInt8(l))
-            payload.append(pkt)
-        }
-        var out: [Data] = []
-        var li = 0, payOff = payload.startIndex
-        var seq: UInt32 = 0
-        var prevLastWas255 = false
-        while li < lacings.count {
-            let take = min(255, lacings.count - li)
-            let chunk = Array(lacings[li ..< li + take])
-            let dataLen = chunk.reduce(0) { $0 + Int($1) }
-            let pdata = payload.subdata(in: payOff ..< payOff + dataLen)
-            var headerType: UInt8 = 0
-            if seq == 0 { headerType |= 0x02 }            // BOS
-            if seq > 0 && prevLastWas255 { headerType |= 0x01 } // continuation
-            out.append(buildPage(headerType: headerType, granule: 0, serial: serial, seq: seq, segTable: chunk, data: pdata))
-            prevLastWas255 = (chunk.last == 255)
-            li += take; payOff += dataLen; seq += 1
+
+            var li = 0, off = pkt.startIndex
+            while li < lacings.count {
+                let take = min(255, lacings.count - li)
+                let chunk = Array(lacings[li ..< li + take])
+                let dataLen = chunk.reduce(0) { $0 + Int($1) }
+                var headerType: UInt8 = 0
+                if seq == 0 { headerType |= 0x02 }   // BOS
+                if li > 0 { headerType |= 0x01 }     // continued packet
+                out.append(buildPage(headerType: headerType, granule: 0, serial: serial, seq: seq,
+                                     segTable: chunk, data: pkt.subdata(in: off ..< off + dataLen)))
+                li += take; off += dataLen; seq += 1
+            }
         }
         return out
     }

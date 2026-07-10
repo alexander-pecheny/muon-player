@@ -34,7 +34,9 @@ struct TrackTests {
         ("file.aif", AudioFormat.aif),
         ("file.aiff", AudioFormat.aiff),
         ("file.wav", AudioFormat.wav),
-        ("file.caf", AudioFormat.caf),
+        ("file.ape", AudioFormat.ape),
+        ("file.wv", AudioFormat.wv),
+        ("file.caf", AudioFormat.unknown),
     ])
     func trackFormats(filename: String, expected: AudioFormat) {
         let url = URL(fileURLWithPath: "/Music/\(filename)")

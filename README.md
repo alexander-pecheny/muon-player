@@ -1,13 +1,42 @@
 # MuonPlayer
 
-A gapless, FFmpeg-powered music player for iOS with a foobar-style queue, a
-local SQLite library, and Last.fm scrobbling.
+A gapless, FFmpeg-powered music player for iOS **and macOS**, with a foobar-style
+queue, a local SQLite library, and Last.fm scrobbling.
 
-- **Platform:** iOS 17+
-- **UI:** SwiftUI
+- **Platforms:** iOS 17+ (`MuonPlayer`) and macOS 14+ (`MuonPlayerMac`)
+- **UI:** SwiftUI — a separate view layer per platform over shared audio,
+  library and scrobbling code
 - **Audio:** custom gapless engine over statically-linked FFmpeg (`libav*`)
 - **Project:** generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen)
   from `project.yml`
+
+The two apps share everything but their views. The iOS app indexes a single
+folder (its Documents directory); the Mac app indexes any number of folders you
+add, held as security-scoped bookmarks.
+
+## Supported formats
+
+A format is supported only if MuonPlayer can both play it and **edit its tags in
+place**, without re-encoding the audio. Formats whose tags it cannot write
+(Matroska `.mka`, ASF `.wma`, CAF `.caf`) are deliberately not indexed.
+
+| Extension | Container | Tags live in |
+|---|---|---|
+| `.mp3` | MPEG | ID3v2.4 at the head |
+| `.aac` | raw ADTS, or MP4 — decided by the bytes, not the name | ID3v2.4, or `ilst` |
+| `.m4a` `.mp4` `.m4b` `.alac` | MP4 | iTunes `ilst` atoms |
+| `.flac` | FLAC | Vorbis comment block |
+| `.ogg` `.oga` `.opus` | Ogg (Vorbis / Opus) | Vorbis comment packet |
+| `.wav` | RIFF | `id3 ` chunk, mirrored into `LIST`/`INFO` |
+| `.aif` `.aiff` | AIFF / AIFC | `ID3 ` chunk, mirrored into `NAME`/`AUTH` |
+| `.ape` `.wv` | Monkey's Audio / WavPack | APEv2 block at the tail |
+
+Two of these carry tags in more than one place, and FFmpeg lets the native chunk
+outrank the ID3 chunk on a duplicate key, so WAV and AIFF are written to both —
+otherwise a stale `INAM` or `NAME` would quietly outlive an edited title. For the
+same reason a trailing ID3v1 block on an APE-tagged file is folded into the APEv2
+tag and removed: FFmpeg looks for the APE footer only at the exact end of the
+file, so anything parked behind it hides the tag entirely.
 
 ## License
 
@@ -46,8 +75,11 @@ EOF
 
 # 3. Generate the Xcode project and build
 xcodegen generate
-open MuonPlayer.xcodeproj
+open MuonPlayer.xcodeproj   # then pick the MuonPlayer or MuonPlayerMac scheme
 ```
+
+Re-run `xcodegen generate` after adding, removing or renaming any source file —
+the `.xcodeproj` is generated and git-ignored.
 
 `.env` and `MuonPlayer/Secrets.swift` are git-ignored. Get your own Last.fm API
 key at <https://www.last.fm/api/account/create>. The app runs without Last.fm
@@ -55,5 +87,9 @@ credentials — scrobbling is simply disabled.
 
 ## Adding music
 
-Import audio files via the Files app under **On My iPhone → MuonPlayer**, then
-**Settings → Rescan Library**.
+**iOS** — import audio files via the Files app under **On My iPhone →
+MuonPlayer**, then **Settings → Rescan Library**.
+
+**macOS** — **Library → Add Folder to Library…** (⌘O), and point it at any folder
+on disk. The app is sandboxed, so it can only read folders you have picked this
+way; each one is remembered as a security-scoped bookmark.

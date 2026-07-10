@@ -7,23 +7,22 @@ enum AudioFormat: String, Sendable {
     case aif
     case aiff
     case wav
-    case caf
     case flac
     case ogg
     case oga
     case opus
-    case wma
     case alac
     case ape
     case wv
-    case mka
     case unknown
 
     /// Everything the scanner picks up. Decoding is handled by FFmpeg, so this
-    /// is a superset of what AVFoundation supports natively.
+    /// is a superset of what AVFoundation supports natively. Every one of these
+    /// can also be tag-edited in place — formats whose tags we cannot write
+    /// (Matroska, ASF, CAF) are deliberately not indexed.
     static let supportedExtensions: Set<String> = [
-        "mp3", "m4a", "aac", "aif", "aiff", "wav", "caf",
-        "flac", "ogg", "oga", "opus", "wma", "alac", "ape", "wv", "mka",
+        "mp3", "m4a", "aac", "alac", "aif", "aiff", "wav",
+        "flac", "ogg", "oga", "opus", "ape", "wv",
     ]
 
     init(fileExtension: String) {
