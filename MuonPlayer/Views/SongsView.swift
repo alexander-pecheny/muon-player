@@ -27,6 +27,7 @@ struct SongsView: View {
                         } label: { Label("Enqueue", systemImage: "text.append") }
                         .tint(player.accentColor)
                     }
+                    .contextMenu { TrackNavigationMenu(track: track) }
             }
         }
         .listStyle(.plain)
@@ -36,6 +37,6 @@ struct SongsView: View {
                 ContentUnavailableView("No Songs", systemImage: "music.note")
             }
         }
-        .task(id: library.trackCount) { tracks = await library.allTracks() }
+        .task(id: library.version) { tracks = await library.allTracks() }
     }
 }

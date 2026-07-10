@@ -4,6 +4,7 @@ import SwiftUI
 /// scrubbable waveform, transport buttons, mode picker, volume, queue toggle.
 struct MacPlayerBar: View {
     @Environment(Player.self) private var player
+    @Environment(LibraryStore.self) private var library
     @Environment(MacRouter.self) private var router
 
     @State private var waveform: [Float] = []
@@ -47,10 +48,15 @@ struct MacPlayerBar: View {
             ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 4)
                 .frame(width: 38, height: 38)
             VStack(alignment: .leading, spacing: 1) {
-                Text(player.currentTrack?.title ?? "Not Playing")
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
                 if let track = player.currentTrack {
+                    Button { openAlbum(track) } label: {
+                        Text(track.title)
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(library.album(for: track) == nil)
+
                     Button { router.openArtist(track.effectiveAlbumArtist) } label: {
                         Text(track.displayArtist)
                             .font(.system(size: 11))
@@ -58,10 +64,19 @@ struct MacPlayerBar: View {
                             .lineLimit(1)
                     }
                     .buttonStyle(.plain)
+                } else {
+                    Text("Not Playing")
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
         }
+    }
+
+    private func openAlbum(_ track: Track) {
+        guard let album = library.album(for: track) else { return }
+        router.openAlbum(album, focus: track.url.path)
     }
 
     private var transport: some View {

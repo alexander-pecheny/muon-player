@@ -161,6 +161,7 @@ private struct CommonDestinations: ViewModifier {
     func body(content: Content) -> some View {
         content
             .navigationDestination(for: Album.self) { AlbumDetailView(album: $0) }
+            .navigationDestination(for: AlbumRef.self) { AlbumDetailView(album: $0.album, focusPath: $0.focusPath) }
             .navigationDestination(for: ArtistRef.self) { ArtistView(artist: $0.name) }
             .navigationDestination(for: FolderRef.self) { FoldersView(directory: $0.url) }
     }

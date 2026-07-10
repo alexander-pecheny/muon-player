@@ -12,9 +12,11 @@ struct MacTrackRow: View {
 
     @Environment(Player.self) private var player
     @Environment(LibraryStore.self) private var library
+    @Environment(MacRouter.self) private var router
     @State private var editing = false
 
     private var isCurrent: Bool { player.currentTrack?.url == track.url }
+    private var album: Album? { library.album(for: track) }
 
     var body: some View {
         HStack(spacing: 9) {
@@ -41,8 +43,16 @@ struct MacTrackRow: View {
                     .lineLimit(1)
                     .foregroundStyle(isCurrent ? player.accentColor : .primary)
                 if showArtwork {
-                    Text("\(track.displayArtist) — \(track.displayAlbum)")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 4) {
+                        Button { router.openArtist(track.effectiveAlbumArtist) } label: {
+                            Text(track.displayArtist).lineLimit(1)
+                        }
+                        Text("—")
+                        Button { openAlbum() } label: { Text(track.displayAlbum).lineLimit(1) }
+                            .disabled(album == nil)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption).foregroundStyle(.secondary)
                 }
             }
 
@@ -80,11 +90,17 @@ struct MacTrackRow: View {
             Button("Play") { player.play(track: track, context: context) }
             Button("Add to Queue") { player.enqueue(track, context: context) }
             Divider()
+            Button("Go to Artist") { router.openArtist(track.effectiveAlbumArtist) }
+            Button("Go to Album") { openAlbum() }.disabled(album == nil)
+            Divider()
             Button("Edit Tags…") { editing = true }
-            Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([track.url])
-            }
+            RevealInFinderButton(url: track.url)
         }
         .sheet(isPresented: $editing) { MacTagEditView(scope: .track(track)) }
+    }
+
+    private func openAlbum() {
+        guard let album else { return }
+        router.openAlbum(album, focus: track.url.path)
     }
 }

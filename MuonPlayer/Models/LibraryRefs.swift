@@ -19,6 +19,14 @@ struct SearchResults {
     var isEmpty: Bool { artists.isEmpty && albums.isEmpty && songs.isEmpty }
 }
 
+/// Navigation value for an album opened from one of its songs: the album screen
+/// scrolls that track into view. Plain `Album` remains the value for opening an
+/// album at the top, so the two are separate destinations.
+struct AlbumRef: Hashable {
+    let album: Album
+    let focusPath: String
+}
+
 /// Navigation value for drilling into a subfolder of the library.
 struct FolderRef: Hashable, Identifiable {
     let url: URL

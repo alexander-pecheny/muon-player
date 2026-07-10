@@ -20,7 +20,7 @@ struct MacHomeView: View {
         }
         .searchable(text: $query, prompt: "Search artists, albums and songs")
         .navigationTitle("Home")
-        .task(id: library.trackCount) { recent = await library.recentAlbums() }
+        .task(id: library.version) { recent = await library.recentAlbums() }
         .task(id: query) {
             results = await library.searchAll(query)
         }

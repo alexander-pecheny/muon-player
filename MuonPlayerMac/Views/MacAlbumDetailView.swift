@@ -1,16 +1,31 @@
 import SwiftUI
 
 struct MacAlbumDetailView: View {
-    let album: Album
+    /// Held as state, not a constant: an album's identity is its artist, title and
+    /// year, so editing any of those makes the value we were pushed with name an
+    /// album that no longer exists. `reload()` re-resolves it.
+    @State private var album: Album
+    private let focusPath: String?
 
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @Environment(MacRouter.self) private var router
     @State private var tracks: [Track] = []
     @State private var editing = false
+    @State private var didFocus = false
+
+    init(album: Album, focusPath: String? = nil) {
+        _album = State(initialValue: album)
+        self.focusPath = focusPath
+    }
 
     private var totalDuration: TimeInterval {
         tracks.compactMap(\.duration).reduce(0, +)
+    }
+
+    /// Every folder this album's files live in — the scope of the Refresh button.
+    private var folders: [URL] {
+        Array(Set(tracks.map { $0.url.deletingLastPathComponent() }))
     }
 
     /// The same release often sits on disk twice (a FLAC rip and an MP3 rip) and
@@ -31,38 +46,78 @@ struct MacAlbumDetailView: View {
     }
 
     var body: some View {
-        List {
-            Section { header.listRowSeparator(.hidden) }
-            // With one folder the heading is noise; with several it's the point.
-            if folderGroups.count <= 1 {
-                Section {
-                    ForEach(tracks) { track in
-                        MacTrackRow(track: track, context: tracks, showNumber: true, showFolder: false)
-                    }
-                }
-            } else {
-                ForEach(folderGroups, id: \.folder) { group in
+        ScrollViewReader { proxy in
+            List {
+                Section { header.listRowSeparator(.hidden) }
+                // With one folder the heading is noise; with several it's the point.
+                if folderGroups.count <= 1 {
                     Section {
-                        // Context is the folder, not the album: playing a track
-                        // from the FLAC rip should continue through the FLAC rip.
-                        ForEach(group.tracks) { track in
-                            MacTrackRow(track: track, context: group.tracks, showNumber: true, showFolder: false)
+                        ForEach(tracks) { track in
+                            MacTrackRow(track: track, context: tracks, showNumber: true, showFolder: false)
+                                .id(track.url.path)
                         }
-                    } header: {
-                        folderHeader(group)
+                    }
+                } else {
+                    ForEach(folderGroups, id: \.folder) { group in
+                        Section {
+                            // Context is the folder, not the album: playing a track
+                            // from the FLAC rip should continue through the FLAC rip.
+                            ForEach(group.tracks) { track in
+                                MacTrackRow(track: track, context: group.tracks, showNumber: true, showFolder: false)
+                                    .id(track.url.path)
+                            }
+                        } header: {
+                            folderHeader(group)
+                        }
                     }
                 }
             }
+            .listStyle(.inset)
+            .overlay {
+                if tracks.isEmpty {
+                    ContentUnavailableView("Album Is Gone", systemImage: "questionmark.folder",
+                                           description: Text("Its files are no longer in the library."))
+                }
+            }
+            .task(id: library.version) { await reload(scrollingWith: proxy) }
         }
-        .listStyle(.inset)
         .navigationTitle(album.title)
         .toolbar {
             ToolbarItem {
+                Button { Task { await library.refresh(folders: folders) } } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .help("Re-read this album's files from disk")
+                .disabled(library.isScanning || tracks.isEmpty)
+            }
+            ToolbarItem {
                 Button { editing = true } label: { Label("Edit Tags", systemImage: "tag") }
+                    .disabled(tracks.isEmpty)
             }
         }
         .sheet(isPresented: $editing) { MacTagEditView(scope: .album(album)) }
-        .task(id: album.id) { tracks = await library.tracks(in: album) }
+    }
+
+    /// Reload the track list, following the album if a tag edit renamed it. The
+    /// files themselves never move, so any one of their paths identifies the album
+    /// afterwards.
+    private func reload(scrollingWith proxy: ScrollViewProxy) async {
+        var target = album
+        var loaded = await library.tracks(in: target)
+        if loaded.isEmpty, let anchor = tracks.first?.url.path ?? focusPath,
+           let moved = await library.album(containingPath: anchor) {
+            target = moved
+            loaded = await library.tracks(in: moved)
+        }
+        album = target
+        tracks = loaded
+
+        guard let focusPath, !didFocus, loaded.contains(where: { $0.url.path == focusPath }) else { return }
+        didFocus = true
+        // The rows this scrolls to are the ones `tracks` just produced; give the
+        // List a beat to lay them out before asking it to find one.
+        try? await Task.sleep(for: .milliseconds(80))
+        withAnimation { proxy.scrollTo(focusPath, anchor: .center) }
     }
 
     private func folderHeader(_ group: (folder: String, tracks: [Track])) -> some View {
@@ -87,6 +142,9 @@ struct MacAlbumDetailView: View {
             .help("Play this folder")
         }
         .textCase(nil)
+        .contextMenu {
+            RevealInFinderButton(url: group.tracks.first?.url.deletingLastPathComponent())
+        }
     }
 
     /// "FLAC · 1006 kbps", or just the codecs when the rips differ in bitrate.
@@ -136,6 +194,10 @@ struct MacAlbumDetailView: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 8)
+        .contextMenu {
+            Button("Edit Tags…") { editing = true }
+            RevealInFinderButton(url: tracks.first?.url)
+        }
     }
 
     private var subtitle: String {

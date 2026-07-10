@@ -36,5 +36,10 @@ final class TabRouter {
     }
 
     func openArtist(_ name: String) { push(ArtistRef(name: name)) }
-    func openAlbum(_ album: Album) { push(album) }
+
+    /// `focus` is the path of a track to scroll to — set when the user tapped a
+    /// song name rather than an album name.
+    func openAlbum(_ album: Album, focus: String? = nil) {
+        if let focus { push(AlbumRef(album: album, focusPath: focus)) } else { push(album) }
+    }
 }

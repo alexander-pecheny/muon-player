@@ -5,6 +5,7 @@ struct HistoryView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @Environment(ScrobbleService.self) private var scrobbler
+    @Environment(\.navPath) private var navPath
     @State private var entries: [HistoryEntry] = []
 
     var body: some View {
@@ -18,11 +19,19 @@ struct HistoryView: View {
                     scrobbleIcon(entry.scrobbleState)
                         .frame(width: 20)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.title)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(entry.artist)
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        Button { open(entry.path, artist: false) } label: {
+                            Text(entry.title)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(entry.path == nil)
+                        Button { open(entry.path, artist: true) } label: {
+                            Text(entry.artist)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(entry.path == nil)
                         if let listen = listenLabel(entry) {
                             Text(listen)
                                 .font(.caption2.monospacedDigit())
@@ -59,11 +68,17 @@ struct HistoryView: View {
         HStack(spacing: 12) {
             liveIcon(track).frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(track.displayArtist)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Button { open(track.url.path, artist: false) } label: {
+                    Text(track.title)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
+                Button { open(track.url.path, artist: true) } label: {
+                    Text(track.displayArtist)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
                 Text(liveListenLabel)
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
@@ -91,6 +106,21 @@ struct HistoryView: View {
             Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(player.accentColor)
         } else {
             Image(systemName: "minus.circle").foregroundStyle(.tertiary)
+        }
+    }
+
+    /// History stores the scrobbled artist name, which is the track artist and may
+    /// be no artist page at all — so resolve the row back to its file and take the
+    /// album (and its album-artist) from the library.
+    private func open(_ path: String?, artist: Bool) {
+        guard let path, let navPath else { return }
+        Task {
+            guard let album = await library.album(containingPath: path) else { return }
+            if artist {
+                navPath.wrappedValue.append(ArtistRef(name: album.artist))
+            } else {
+                navPath.wrappedValue.append(AlbumRef(album: album, focusPath: path))
+            }
         }
     }
 

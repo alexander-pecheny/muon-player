@@ -6,6 +6,7 @@
     scripts/run-mac.py --clean         # clean build
     scripts/run-mac.py --no-open       # build only
     scripts/run-mac.py --logs          # run in the foreground, streaming stdout/stderr
+    scripts/run-mac.py --refresh-icon-cache   # after changing the app icon
 """
 import argparse
 import subprocess
@@ -16,6 +17,8 @@ REPO = Path(__file__).resolve().parent.parent
 PROJECT = REPO / "MuonPlayer.xcodeproj"
 SCHEME = "MuonPlayerMac"
 BUNDLE = "me.pecheny.muonplayer"
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks"
+              "/LaunchServices.framework/Versions/A/Support/lsregister")
 
 
 def build(configuration: str, clean: bool) -> None:
@@ -40,6 +43,19 @@ def product(configuration: str) -> Path:
     return max(apps, key=lambda p: p.stat().st_mtime)
 
 
+def refresh_icon_cache(app: Path) -> None:
+    """Make the Dock show a changed app icon.
+
+    Launch Services caches an icon against the bundle's mtime, which a rebuild
+    that only swapped the asset catalog does not move — so `touch` before
+    re-registering, or the re-registration is a no-op.
+    """
+    subprocess.run(["touch", str(app)], check=True)
+    subprocess.run([LSREGISTER, "-f", str(app)], check=True)
+    subprocess.run(["killall", "Dock"], capture_output=True)
+    print("icon cache refreshed (Dock restarted)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -48,6 +64,8 @@ def main() -> None:
     ap.add_argument("--no-open", action="store_true", help="build only, don't launch")
     ap.add_argument("--logs", action="store_true",
                     help="run in the foreground and stream the app's output")
+    ap.add_argument("--refresh-icon-cache", action="store_true",
+                    help="re-register the bundle and restart the Dock, so a changed icon shows")
     args = ap.parse_args()
 
     configuration = "Release" if args.release else "Debug"
@@ -55,6 +73,8 @@ def main() -> None:
 
     app = product(configuration)
     print(f"app: {app}")
+    if args.refresh_icon_cache:
+        refresh_icon_cache(app)
     if args.no_open:
         return
 

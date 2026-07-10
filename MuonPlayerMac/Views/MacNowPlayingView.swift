@@ -24,10 +24,14 @@ struct MacNowPlayingView: View {
                 .shadow(radius: 10, y: 4)
 
             VStack(spacing: 3) {
-                Text(track.title)
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+                Button { openAlbum(track, focused: true) } label: {
+                    Text(track.title)
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
+                .disabled(library.album(for: track) == nil)
 
                 Button { router.openArtist(track.effectiveAlbumArtist) } label: {
                     Text(track.displayArtist).font(.subheadline).foregroundStyle(.secondary)
@@ -35,11 +39,11 @@ struct MacNowPlayingView: View {
                 .buttonStyle(.plain)
 
                 if let album = track.album {
-                    Button { if let a = matchingAlbum(track) { router.openAlbum(a) } } label: {
+                    Button { openAlbum(track, focused: false) } label: {
                         Text(album).font(.caption).foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
-                    .disabled(matchingAlbum(track) == nil)
+                    .disabled(library.album(for: track) == nil)
                 }
 
                 Text(track.formatDescription)
@@ -78,9 +82,8 @@ struct MacNowPlayingView: View {
         }
     }
 
-    private func matchingAlbum(_ track: Track) -> Album? {
-        library.albums.first {
-            $0.title == track.displayAlbum && $0.artist == track.effectiveAlbumArtist
-        }
+    private func openAlbum(_ track: Track, focused: Bool) {
+        guard let album = library.album(for: track) else { return }
+        router.openAlbum(album, focus: focused ? track.url.path : nil)
     }
 }

@@ -29,6 +29,9 @@ struct HistoryEntry: Identifiable, Sendable {
     let scrobbleState: ScrobbleState
     let duration: Int?         // track length, seconds
     let listened: Int?         // seconds actually played
+    /// The file that was played, when it was a library track. Rows written before
+    /// this column existed have none, and cannot be navigated back to.
+    let path: String?
 }
 
 /// Fields a user can override via tag editing (stored in the DB, layered over
@@ -55,8 +58,9 @@ struct TagEdits: Sendable {
 /// every file on next launch — after a fix to the reader itself (the
 /// AV_DICT_IGNORE_SUFFIX album/album_artist collision, the CP1251 tag repair) or
 /// after FFmpeg gains a codec, since files it previously could not demux were
-/// indexed with no duration, bitrate or tags (wavpack and APE, at v6).
-let kScannerVersion: Int32 = 6
+/// indexed with no duration, bitrate or tags (wavpack and APE, at v6; the CP1251
+/// repair learning to see past `÷` and ASCII-heavy titles, at v7).
+let kScannerVersion: Int32 = 7
 
 /// A pending or completed scrobble row.
 struct ScrobbleRow: Sendable {
@@ -259,10 +263,14 @@ actor Database {
         return sqlite3_last_insert_rowid(db)
     }
 
-    /// Remove tracks whose paths are no longer present.
-    func pruneMissing(existingPaths: Set<String>) {
+    /// Remove tracks whose paths are no longer present. `underFolders` (canonical,
+    /// no trailing slash) narrows the sweep to those subtrees — a scan of one album
+    /// folder saw only that folder's files, so it must not delete the rest of the
+    /// library for being absent from them.
+    func pruneMissing(existingPaths: Set<String>, underFolders: [String]? = nil) {
         let all = allTrackPaths()
         for path in all where !existingPaths.contains(path) {
+            if let underFolders, !underFolders.contains(where: { path.hasPrefix($0 + "/") }) { continue }
             guard let stmt = prepare("DELETE FROM tracks WHERE path = ?") else { continue }
             bindText(stmt, 1, path)
             sqlite3_step(stmt)
@@ -419,6 +427,13 @@ actor Database {
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
         return readTracks(stmt)
+    }
+
+    func track(atPath path: String) -> Track? {
+        guard let stmt = prepare("SELECT \(trackColumns) FROM tracks WHERE path = ? LIMIT 1;") else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, path)
+        return readTracks(stmt).first
     }
 
     /// Every track anywhere beneath `folder` (an absolute, canonical path).
@@ -679,7 +694,7 @@ actor Database {
     }
 
     func history(limit: Int = 1000) -> [HistoryEntry] {
-        let sql = "SELECT id, artist, album, title, played_at, scrobble_state, duration, listened FROM history ORDER BY played_at DESC, id DESC LIMIT ?;"
+        let sql = "SELECT id, artist, album, title, played_at, scrobble_state, duration, listened, path FROM history ORDER BY played_at DESC, id DESC LIMIT ?;"
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
@@ -693,7 +708,8 @@ actor Database {
                 playedAt: Int(sqlite3_column_int64(stmt, 4)),
                 scrobbleState: HistoryEntry.ScrobbleState(rawValue: columnText(stmt, 5) ?? "ineligible") ?? .ineligible,
                 duration: columnInt(stmt, 6),
-                listened: columnInt(stmt, 7)
+                listened: columnInt(stmt, 7),
+                path: columnText(stmt, 8)
             ))
         }
         return rows

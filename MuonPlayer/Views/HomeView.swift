@@ -11,8 +11,17 @@ struct HomeView: View {
     @State private var results = SearchResults()
     @State private var recent: [Album] = []
     @State private var searchTask: Task<Void, Never>?
+    @Environment(\.navPath) private var navPath
 
     private let columns = [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)]
+
+    /// A grid cell already navigates to its album on tap, so the artist link has
+    /// to live in the long-press menu.
+    @ViewBuilder private func goToArtist(_ album: Album) -> some View {
+        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+            Label("Go to Artist", systemImage: "music.mic")
+        }
+    }
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,7 +36,7 @@ struct HomeView: View {
             }
         }
         .searchable(text: $query, prompt: "Artists, albums, or songs")
-        .task(id: library.trackCount) { recent = await library.recentAlbums() }
+        .task(id: library.version) { recent = await library.recentAlbums() }
         .onChange(of: query) { _, _ in scheduleSearch() }
     }
 
@@ -49,6 +58,7 @@ struct HomeView: View {
                         ForEach(recent) { album in
                             NavigationLink(value: album) { albumCell(album) }
                                 .buttonStyle(.plain)
+                                .contextMenu { goToArtist(album) }
                         }
                     }
                     .padding(.horizontal)
@@ -106,6 +116,7 @@ struct HomeView: View {
                                 }
                             }
                         }
+                        .contextMenu { goToArtist(album) }
                     }
                 }
             }
@@ -121,6 +132,7 @@ struct HomeView: View {
                                 } label: { Label("Enqueue", systemImage: "text.append") }
                                 .tint(player.accentColor)
                             }
+                            .contextMenu { TrackNavigationMenu(track: track) }
                     }
                 }
             }

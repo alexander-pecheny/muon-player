@@ -34,8 +34,7 @@ struct AlbumGrid: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: columnWidth), spacing: 16)], spacing: 18) {
                 ForEach(albums) { album in
-                    NavigationLink(value: album) { AlbumCell(album: album) }
-                        .buttonStyle(.plain)
+                    AlbumCell(album: album)
                 }
             }
             .padding(16)
@@ -47,19 +46,34 @@ struct AlbumCell: View {
     let album: Album
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
+    @Environment(MacRouter.self) private var router
     @State private var editing = false
 
+    /// The cover and title link to the album, the caption to the artist. The
+    /// artist button is a sibling of the NavigationLink, not nested inside its
+    /// label — a button in there never sees the click, and swallows it besides.
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ArtworkView(path: album.artworkPath, cornerRadius: 6)
-                .aspectRatio(1, contentMode: .fit)
-                .shadow(radius: 2, y: 1)
-            Text(album.title).font(.callout).lineLimit(1)
+            NavigationLink(value: album) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ArtworkView(path: album.artworkPath, cornerRadius: 6)
+                        .aspectRatio(1, contentMode: .fit)
+                        .shadow(radius: 2, y: 1)
+                    Text(album.title).font(.callout).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .buttonStyle(.plain)
+
             HStack(spacing: 4) {
-                Text(album.artist).lineLimit(1)
+                Button { router.openArtist(album.artist) } label: {
+                    Text(album.artist).lineLimit(1)
+                }
+                .buttonStyle(.plain)
                 if let year = album.year {
                     Text("· \(String(year))")
                 }
+                Spacer(minLength: 0)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -68,9 +82,16 @@ struct AlbumCell: View {
             Button("Play") { Task { await play() } }
             Button("Add to Queue") { Task { await enqueue() } }
             Divider()
+            Button("Go to Artist") { router.openArtist(album.artist) }
             Button("Edit Tags…") { editing = true }
+            Button("Reveal in Finder") { Task { await reveal() } }
         }
         .sheet(isPresented: $editing) { MacTagEditView(scope: .album(album)) }
+    }
+
+    private func reveal() async {
+        guard let first = await library.tracks(in: album).first else { return }
+        revealInFinder(first.url)
     }
 
     private func play() async {

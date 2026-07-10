@@ -22,6 +22,9 @@ struct MacRootView: View {
                     NavigationStack(path: router.path) {
                         section(router.section)
                             .navigationDestination(for: Album.self) { MacAlbumDetailView(album: $0) }
+                            .navigationDestination(for: AlbumRef.self) {
+                                MacAlbumDetailView(album: $0.album, focusPath: $0.focusPath)
+                            }
                             .navigationDestination(for: ArtistRef.self) { MacArtistView(artist: $0.name) }
                             .navigationDestination(for: FolderRef.self) { MacFoldersView(directory: $0.url) }
                     }
@@ -39,27 +42,42 @@ struct MacRootView: View {
         .sheet(isPresented: $router.showQueue) { MacQueueView() }
     }
 
-    // List's single-selection binding is optional; the router's isn't (there is
-    // always a selected section), so a nil write from a deselect is dropped.
-    private var selection: Binding<MacRouter.Section?> {
-        Binding(get: { router.section }, set: { if let s = $0 { router.section = s } })
-    }
-
     // A `safeAreaInset` whose content starts out empty never lays the inset in
     // once it appears, so the scan status simply never showed. A plain VStack
     // under the List does.
+    //
+    // The rows carry their own selection fill rather than using `List(selection:)`.
+    // AppKit paints a sidebar's selection with `NSColor.controlAccentColor` — the
+    // system-wide setting — and neither `.tint` nor `.accentColor` reaches it, so
+    // the selected row stayed blue while everything else followed the artwork.
     private var sidebar: some View {
         VStack(spacing: 0) {
-            List(selection: selection) {
+            List {
                 Section("Library") {
                     ForEach(MacRouter.Section.allCases) { s in
-                        Label(s.title, systemImage: s.systemImage).tag(s)
+                        sidebarRow(s)
                     }
                 }
             }
+            .listStyle(.sidebar)
             ScanStatusView()
         }
         .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 260)
+    }
+
+    private func sidebarRow(_ s: MacRouter.Section) -> some View {
+        let selected = router.section == s
+        return Button { router.section = s } label: {
+            Label(s.title, systemImage: s.systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(selected ? Color.white : .primary)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(selected ? player.accentColor : .clear)
+        )
     }
 
     @ViewBuilder private func section(_ s: MacRouter.Section) -> some View {

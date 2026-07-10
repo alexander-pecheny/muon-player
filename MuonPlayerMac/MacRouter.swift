@@ -51,6 +51,15 @@ final class MacRouter {
         paths[section] = p
     }
 
-    func openArtist(_ name: String) { push(ArtistRef(name: name)) }
-    func openAlbum(_ album: Album) { push(album) }
+    func openArtist(_ name: String) {
+        showQueue = false
+        push(ArtistRef(name: name))
+    }
+
+    /// `focus` is the path of a track to scroll to — set when the user clicked a
+    /// song name rather than an album name.
+    func openAlbum(_ album: Album, focus: String? = nil) {
+        showQueue = false
+        if let focus { push(AlbumRef(album: album, focusPath: focus)) } else { push(album) }
+    }
 }

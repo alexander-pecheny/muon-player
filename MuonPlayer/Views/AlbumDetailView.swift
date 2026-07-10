@@ -1,18 +1,35 @@
 import SwiftUI
 
 struct AlbumDetailView: View {
-    let album: Album
+    /// Held as state, not a constant: an album's identity is its artist, title and
+    /// year, so editing any of those makes the value we were pushed with name an
+    /// album that no longer exists. `reload()` re-resolves it.
+    @State private var album: Album
+    private let focusPath: String?
+
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @State private var tracks: [Track] = []
     @State private var editingAlbum = false
     @State private var editingTrack: Track?
+    @State private var didFocus = false
     // This album's own artwork color, independent of what's playing — so a red
     // album never gets tinted by a green now-playing track (and vice versa).
     @State private var albumAccent: Color = .neutralAccent
     @Environment(\.navPath) private var navPath
 
+    init(album: Album, focusPath: String? = nil) {
+        _album = State(initialValue: album)
+        self.focusPath = focusPath
+    }
+
     var body: some View {
+        ScrollViewReader { proxy in
+            content(proxy)
+        }
+    }
+
+    private func content(_ proxy: ScrollViewProxy) -> some View {
         List {
             Section {
                 VStack(spacing: 12) {
@@ -24,7 +41,10 @@ struct AlbumDetailView: View {
 
                     VStack(spacing: 2) {
                         Text(album.title).font(.title3.bold()).multilineTextAlignment(.center)
-                        Text(album.artist).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+                            Text(album.artist).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        }
+                        .buttonStyle(.plain)
                         Text(trackCountLine)
                             .font(.caption).foregroundStyle(.tertiary)
                         if let fmt = formatSummary {
@@ -64,6 +84,7 @@ struct AlbumDetailView: View {
                 ForEach(tracks) { track in
                     TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url,
                              hideArtist: artistMatchesAlbum(track), accent: albumAccent)
+                        .id(track.url.path)
                         .contentShape(Rectangle())
                         .onTapGesture { player.play(track: track, context: tracks) }
                         .swipeActions(edge: .trailing) {
@@ -99,7 +120,13 @@ struct AlbumDetailView: View {
         }
         .sheet(isPresented: $editingAlbum) { TagEditView(scope: .album(album)) }
         .sheet(item: $editingTrack) { t in TagEditView(scope: .track(t)) }
-        .task(id: library.trackCount) { tracks = await library.tracks(in: album) }
+        .overlay {
+            if tracks.isEmpty {
+                ContentUnavailableView("Album Is Gone", systemImage: "questionmark.folder",
+                                       description: Text("Its files are no longer in the library."))
+            }
+        }
+        .task(id: library.version) { await reload(scrollingWith: proxy) }
         .task(id: album.artworkPath) {
             guard let path = album.artworkPath,
                   let image = await library.artwork(forPath: path) else {
@@ -107,6 +134,28 @@ struct AlbumDetailView: View {
             }
             albumAccent = DominantColor.from(image) ?? .neutralAccent
         }
+    }
+
+    /// Reload the track list, following the album if a tag edit renamed it. The
+    /// files themselves never move, so any one of their paths identifies the album
+    /// afterwards.
+    private func reload(scrollingWith proxy: ScrollViewProxy) async {
+        var target = album
+        var loaded = await library.tracks(in: target)
+        if loaded.isEmpty, let anchor = tracks.first?.url.path ?? focusPath,
+           let moved = await library.album(containingPath: anchor) {
+            target = moved
+            loaded = await library.tracks(in: moved)
+        }
+        album = target
+        tracks = loaded
+
+        guard let focusPath, !didFocus, loaded.contains(where: { $0.url.path == focusPath }) else { return }
+        didFocus = true
+        // The rows this scrolls to are the ones `tracks` just produced; give the
+        // List a beat to lay them out before asking it to find one.
+        try? await Task.sleep(for: .milliseconds(80))
+        withAnimation { proxy.scrollTo(focusPath, anchor: .center) }
     }
 
     // MARK: Menus

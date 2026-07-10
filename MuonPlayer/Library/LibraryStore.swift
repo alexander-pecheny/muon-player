@@ -11,6 +11,13 @@ final class LibraryStore {
     private(set) var trackCount = 0
     private(set) var scanProgress: (done: Int, total: Int)?
 
+    /// Bumped every time the library's contents are reloaded from SQLite. Views
+    /// holding a derived snapshot — a track list, the recently-added shelf — key
+    /// their reload on this. `trackCount` is not enough: editing tags regroups the
+    /// albums without changing how many tracks there are, which is precisely when
+    /// a stale snapshot is most visible.
+    private(set) var version = 0
+
     /// What the scan is doing right now. Walking the folders is its own long
     /// phase on a big library — it has no total to count against, so it reports
     /// how many files it has found so far rather than showing a bare spinner.
@@ -37,7 +44,6 @@ final class LibraryStore {
     private(set) var scanPhase: ScanPhase = .idle
 
     let database: Database
-    private var scanner: FileScanner
 
     /// The folders being indexed. iOS has exactly one (Documents); on macOS the
     /// user adds and removes them.
@@ -53,7 +59,6 @@ final class LibraryStore {
         let dbPath = support.appendingPathComponent(databaseName).path
         self.database = Database(path: dbPath)
         self.roots = roots
-        self.scanner = FileScanner(roots: roots.map(\.url))
     }
 
     convenience init(rootURL: URL) {
@@ -64,7 +69,6 @@ final class LibraryStore {
     /// folders that were removed are pruned by the rescan.
     func setRoots(_ newRoots: [LibraryRoot]) async {
         roots = newRoots
-        scanner = FileScanner(roots: newRoots.map(\.url))
         await rescan()
     }
 
@@ -82,6 +86,7 @@ final class LibraryStore {
         #endif
         albums = await database.albums()
         trackCount = await database.trackCount()
+        version &+= 1
     }
 
     /// Incrementally scan the library folder: read metadata for new/changed
@@ -94,15 +99,30 @@ final class LibraryStore {
     /// the metadata-reading logic itself changed (a rare, deliberate event).
     func rescan() async {
         guard !isScanning else { return }
+        // If the metadata-reading logic changed since this DB was populated,
+        // re-read every file (repairs libraries scanned by the buggy tag reader).
+        let forceReadAll = await database.scannerVersion() < kScannerVersion
+        await scan(folders: roots.map(\.url), pruneScope: nil, forceReadAll: forceReadAll)
+        if forceReadAll { await database.setScannerVersion(kScannerVersion) }
+    }
+
+    /// Re-read just these folders — what the album screen's Refresh button does
+    /// after the files were changed by some other app. Every file is read rather
+    /// than mtime-diffed, since an outside tag editor may preserve the mtime, and
+    /// only rows beneath `folders` are pruned.
+    func refresh(folders: [URL]) async {
+        guard !isScanning else { return }
+        await scan(folders: folders, pruneScope: folders, forceReadAll: true)
+    }
+
+    private func scan(folders: [URL], pruneScope: [URL]?, forceReadAll: Bool) async {
+        guard !folders.isEmpty else { return }
         isScanning = true
         scanPhase = .findingFiles(found: 0)
         defer { isScanning = false; scanProgress = nil; scanPhase = .idle }
 
-        // If the metadata-reading logic changed since this DB was populated,
-        // re-read every file (repairs libraries scanned by the buggy tag reader).
-        let dbVersion = await database.scannerVersion()
-        let forceReadAll = dbVersion < kScannerVersion
         let known = await database.knownPathsWithMtime()
+        let scanner = FileScanner(roots: folders)
 
         // Enumerate the folder and diff against the DB off the main actor — for a
         // large library this is thousands of stat() calls we don't want blocking
@@ -134,8 +154,8 @@ final class LibraryStore {
             await readAndUpsert(toRead)
         }
 
-        await database.pruneMissing(existingPaths: existingPaths)
-        if forceReadAll { await database.setScannerVersion(kScannerVersion) }
+        await database.pruneMissing(existingPaths: existingPaths,
+                                    underFolders: pruneScope?.map(LibraryRoot.canonicalPath(of:)))
         await loadFromDatabase()
     }
 
@@ -211,6 +231,23 @@ final class LibraryStore {
         await database.tracks(inAlbum: album)
     }
 
+    /// The album a track is filed under, as the album list groups them. The year
+    /// is part of an album's identity, but a track can carry a different one from
+    /// the release it sits in, so fall back to artist + title.
+    func album(for track: Track) -> Album? {
+        let artist = track.effectiveAlbumArtist, title = track.displayAlbum
+        return albums.first { $0.artist == artist && $0.title == title && $0.year == track.year }
+            ?? albums.first { $0.artist == artist && $0.title == title }
+    }
+
+    /// The album that now holds the file at `path`. This is how the album screen
+    /// follows itself across a tag edit that rewrote the very fields its identity
+    /// is built from — the file's path is the one thing tag editing never changes.
+    func album(containingPath path: String) async -> Album? {
+        guard let track = await database.track(atPath: path) else { return nil }
+        return album(for: track)
+    }
+
     func allTracks() async -> [Track] {
         await database.allTracks()
     }
@@ -257,9 +294,14 @@ final class LibraryStore {
 
     /// All tracks whose (effective) album-artist matches `track`'s, ordered by
     /// album release year then disc/track (used by the "Repeat Artist" playhead).
+    ///
+    /// Unlike the folder-scoped orders, this one reaches across roots, so a lossy
+    /// mirror of an album lands right beside the lossless original — same album,
+    /// same track number — and the same song would play twice in a row. The
+    /// duplicates are collapsed to one copy each.
     func albumArtistTracks(for track: Track) async -> [Track] {
         let tracks = await database.tracks(byAlbumArtist: track.effectiveAlbumArtist)
-        return Self.orderByAlbum(tracks)
+        return Self.collapseDuplicates(Self.orderByAlbum(tracks), preferring: track)
     }
 
     /// Absolute path of the root-level folder holding `track` (its artist folder).
@@ -301,6 +343,54 @@ final class LibraryStore {
             if tna != tnb { return tna < tnb }
             return a.url.lastPathComponent.localizedStandardCompare(b.url.lastPathComponent) == .orderedAscending
         }
+    }
+
+    /// Keep one file per recording, in the order given. `anchor` — the track that
+    /// is playing — always survives, so rebuilding the timeline around it never
+    /// drops the playhead's own file out from under it.
+    nonisolated static func collapseDuplicates(_ tracks: [Track], preferring anchor: Track?) -> [Track] {
+        var kept: [Track] = []
+        var slot: [String: Int] = [:]
+        for track in tracks {
+            let key = recordingKey(track)
+            if let i = slot[key], sameLength(kept[i], track) {
+                if isBetterCopy(track, than: kept[i], anchor: anchor) { kept[i] = track }
+            } else {
+                slot[key] = kept.count
+                kept.append(track)
+            }
+        }
+        return kept
+    }
+
+    /// Where the tags place a track within its album. Two files agreeing on all of
+    /// it are the same song; what differs is only which encode of it you have.
+    private nonisolated static func recordingKey(_ t: Track) -> String {
+        [t.displayAlbum.lowercased(), String(t.discNo ?? 1),
+         t.trackNo.map(String.init) ?? "", t.title.lowercased()].joined(separator: "\u{1}")
+    }
+
+    /// A transcode differs from its source by the encoder's priming delay — a few
+    /// milliseconds. A second of slack is still far tighter than any alternate
+    /// take, remaster or live version that might share the same tags.
+    private nonisolated static func sameLength(_ a: Track, _ b: Track) -> Bool {
+        guard let da = a.duration, let db = b.duration else { return false }
+        return abs(da - db) <= 1
+    }
+
+    private static let losslessCodecs: Set<String> = [
+        "flac", "alac", "wavpack", "ape", "tta",
+        "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f32be", "pcm_s16be", "pcm_u8",
+    ]
+
+    private nonisolated static func isBetterCopy(_ a: Track, than b: Track, anchor: Track?) -> Bool {
+        if let anchor {
+            if a.url == anchor.url { return true }
+            if b.url == anchor.url { return false }
+        }
+        let la = losslessCodecs.contains(a.codec ?? ""), lb = losslessCodecs.contains(b.codec ?? "")
+        if la != lb { return la }
+        return (a.bitrate ?? 0) > (b.bitrate ?? 0)
     }
 
     // MARK: - Tag editing (writes tags into the actual files)

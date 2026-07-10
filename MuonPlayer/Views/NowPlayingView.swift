@@ -22,9 +22,18 @@ struct NowPlayingView: View {
                 .padding(.horizontal)
 
             VStack(spacing: 4) {
-                Text(player.currentTrack?.title ?? "Not Playing")
-                    .font(.title2.bold()).multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let track = player.currentTrack {
+                    Button { goToAlbum(focus: track.url.path) } label: {
+                        Text(track.title)
+                            .font(.title2.bold()).multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(matchingAlbum(for: track) == nil)
+                } else {
+                    Text("Not Playing")
+                        .font(.title2.bold()).multilineTextAlignment(.center)
+                }
                 if let track = player.currentTrack {
                     Button { goToArtist() } label: {
                         Text(track.displayArtist)
@@ -33,7 +42,7 @@ struct NowPlayingView: View {
                     }
                     .buttonStyle(.plain)
                     if let album = track.album {
-                        Button { goToAlbum() } label: {
+                        Button { goToAlbum(focus: nil) } label: {
                             Text(album).font(.subheadline).foregroundStyle(.tertiary).multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -175,15 +184,14 @@ struct NowPlayingView: View {
         router.openArtist(name)
     }
 
-    private func goToAlbum() {
+    private func goToAlbum(focus: String?) {
         guard let track = player.currentTrack, let album = matchingAlbum(for: track) else { return }
         dismiss()
-        router.openAlbum(album)
+        router.openAlbum(album, focus: focus)
     }
 
     private func matchingAlbum(for track: Track) -> Album? {
-        guard let title = track.album else { return nil }
-        return library.albums.first { $0.artist == track.effectiveAlbumArtist && $0.title == title }
+        library.album(for: track)
     }
 
     // Item #10: what's coming next (explicit queue head, else playhead's next).

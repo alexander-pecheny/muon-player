@@ -27,6 +27,6 @@ struct MacSongsView: View {
         }
         .searchable(text: $query, prompt: "Filter songs")
         .navigationTitle("Songs")
-        .task(id: library.trackCount) { tracks = await library.allTracks() }
+        .task(id: library.version) { tracks = await library.allTracks() }
     }
 }

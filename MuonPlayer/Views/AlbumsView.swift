@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AlbumsView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(\.navPath) private var navPath
     @State private var query = ""
 
     private let columns = [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)]
@@ -25,6 +26,13 @@ struct AlbumsView: View {
                             AlbumCell(album: album)
                         }
                         .buttonStyle(.plain)
+                        // A cell's tap already opens the album, so the artist link
+                        // has to live in the long-press menu.
+                        .contextMenu {
+                            Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+                                Label("Go to Artist", systemImage: "music.mic")
+                            }
+                        }
                     }
                 }
                 .padding()
