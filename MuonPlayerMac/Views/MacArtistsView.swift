@@ -2,12 +2,10 @@ import SwiftUI
 
 struct MacArtistsView: View {
     @Environment(LibraryStore.self) private var library
-    @State private var query = ""
 
     private var artists: [ArtistResult] {
         let names = Set(library.albums.map(\.artist))
         return names
-            .filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             .map { name in
                 ArtistResult(name: name,
@@ -29,11 +27,9 @@ struct MacArtistsView: View {
         }
         .overlay {
             if artists.isEmpty {
-                ContentUnavailableView(library.albums.isEmpty ? "No Artists" : "No Results",
-                                       systemImage: "music.mic")
+                ContentUnavailableView("No Artists", systemImage: "music.mic")
             }
         }
-        .searchable(text: $query, prompt: "Filter artists")
         .navigationTitle("Artists")
     }
 }

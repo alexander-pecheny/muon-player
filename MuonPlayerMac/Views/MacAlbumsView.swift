@@ -3,24 +3,14 @@ import SwiftUI
 /// A resizable grid of album covers. Clicking a cover drills into the album.
 struct MacAlbumsView: View {
     @Environment(LibraryStore.self) private var library
-    @State private var query = ""
-
-    private var shown: [Album] {
-        guard !query.isEmpty else { return library.albums }
-        return library.albums.filter {
-            $0.title.localizedCaseInsensitiveContains(query) || $0.artist.localizedCaseInsensitiveContains(query)
-        }
-    }
 
     var body: some View {
-        AlbumGrid(albums: shown)
+        AlbumGrid(albums: library.albums)
             .overlay {
-                if shown.isEmpty {
-                    ContentUnavailableView(library.albums.isEmpty ? "No Albums" : "No Results",
-                                           systemImage: "square.stack")
+                if library.albums.isEmpty {
+                    ContentUnavailableView("No Albums", systemImage: "square.stack")
                 }
             }
-            .searchable(text: $query, prompt: "Filter albums")
             .navigationTitle("Albums")
     }
 }

@@ -5,6 +5,7 @@ struct MacRootView: View {
     @Environment(Player.self) private var player
     @Environment(LibraryFolders.self) private var folders
     @Environment(MacRouter.self) private var router
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         @Bindable var router = router
@@ -20,16 +21,29 @@ struct MacRootView: View {
                     WelcomeView()
                 } else {
                     NavigationStack(path: router.path) {
-                        section(router.section)
-                            .navigationDestination(for: Album.self) { MacAlbumDetailView(album: $0) }
-                            .navigationDestination(for: AlbumRef.self) {
-                                MacAlbumDetailView(album: $0.album, focusPath: $0.focusPath)
+                        Group {
+                            if router.searchQuery.isEmpty {
+                                section(router.section)
+                            } else {
+                                MacSearchResultsView(query: router.searchQuery)
                             }
-                            .navigationDestination(for: ArtistRef.self) { MacArtistView(artist: $0.name) }
-                            .navigationDestination(for: FolderRef.self) { MacFoldersView(directory: $0.url) }
+                        }
+                        .navigationDestination(for: Album.self) { MacAlbumDetailView(album: $0) }
+                        .navigationDestination(for: AlbumRef.self) {
+                            MacAlbumDetailView(album: $0.album, focusPath: $0.focusPath)
+                        }
+                        .navigationDestination(for: ArtistRef.self) { MacArtistView(artist: $0.name) }
+                        .navigationDestination(for: FolderRef.self) { MacFoldersView(directory: $0.url) }
                     }
                 }
             }
+            // On the split view, not a detail view: there the field persists across
+            // pushed pages (album, artist) instead of vanishing the moment you drill
+            // in, and still renders — a `.searchable` on the inner NavigationStack
+            // never reaches the toolbar at all.
+            .searchable(text: $router.searchQuery, placement: .toolbar,
+                        prompt: "Search artists, albums and songs")
+            .searchFocus($searchFocused)
             .inspector(isPresented: $router.showNowPlaying) {
                 MacNowPlayingView()
                     .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
@@ -38,6 +52,12 @@ struct MacRootView: View {
             MacPlayerBar()
         }
         .tint(player.accentColor)
+        // A query typed while drilled into an album would otherwise stay hidden
+        // behind it — the results only replace the section root.
+        .onChange(of: router.searchQuery) { _, new in
+            if !new.isEmpty { router.popToRoot() }
+        }
+        .onChange(of: router.searchFocusToken) { searchFocused = true }
         .spaceTogglesPlayback(player)
         .sheet(isPresented: $router.showQueue) { MacQueueView() }
     }
@@ -88,6 +108,19 @@ struct MacRootView: View {
         case .songs: MacSongsView()
         case .folders: MacFoldersView()
         case .history: MacHistoryView()
+        }
+    }
+}
+
+private extension View {
+    /// `.searchFocused` is macOS 15+; the deployment floor is 14, where ⌘F simply
+    /// does nothing rather than failing to build.
+    @ViewBuilder
+    func searchFocus(_ binding: FocusState<Bool>.Binding) -> some View {
+        if #available(macOS 15.0, *) {
+            searchFocused(binding)
+        } else {
+            self
         }
     }
 }
