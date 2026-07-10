@@ -33,6 +33,7 @@ struct MacFoldersView: View {
                             Label(folder.lastPathComponent,
                                   systemImage: isRoot ? "folder.badge.gearshape" : "folder")
                         }
+                        .contextMenu { RevealInFinderButton(url: folder) }
                     }
                 }
             }
