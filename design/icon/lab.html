@@ -73,7 +73,7 @@
 </div>
 
 <script type="module">
-import { buildSVG, COLORS, DEFAULTS, derived, RANGES, SIZE } from "./icon.js";
+import { buildSVG, COLORS, DEFAULTS, derived, DRIVER_BASE, RANGES, SIZE } from "./icon.js";
 
 const el = {};
 const ranges = document.getElementById("ranges");
@@ -132,7 +132,7 @@ function render() {
   const { radius, span } = derived(p);
   document.getElementById("derived").innerHTML =
     `innermost arc: radius <b>${radius.toFixed(0)}</b> · half-span <b>${span.toFixed(1)}°</b> · `
-    + `driver Ø <b>${(p.driverFrac * p.waveH).toFixed(0)}</b>`;
+    + `driver Ø <b>${(p.driverFrac * DRIVER_BASE).toFixed(0)}</b>`;
 }
 
 document.getElementById("copy").onclick = async () => {
