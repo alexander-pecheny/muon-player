@@ -8,23 +8,35 @@
 
 export const SIZE = 1024;
 
+// Nominal arc height the driver is sized against, so `driverFrac` controls the
+// driver on its own and per-side `waveH` changes leave it alone.
+export const DRIVER_BASE = 200;
+
 // [key, label, min, max, step, default, decimals] — drives both the lab sliders
 // and the CLI flags, so a new knob only has to be added here.
 export const RANGES = [
-  ["stroke",     "Stroke width",    4,   60, 1,    33,   0],
-  ["bow",        "Bulge",           8,  140, 1,    42,   0],
-  ["waveH",      "Arc height",    200,  820, 5,   200,   0],
-  ["step",       "Stroke spacing",  30, 150, 1,    66,   0],
-  ["cone",       "Wave flare",      0,  1.5, 0.01, 1.26, 2],
-  ["bump",       "Hump height",   0.2,  1.5, 0.01, 0.72, 2],
-  ["slant",      "Joiner slant", -0.5,  2.5, 0.05, 1.35, 2],
+  ["strokeL",    "Stroke (muo)",    4,   60, 1,    36,   0],
+  ["strokeR",    "Stroke (n)",      4,   60, 1,    36,   0],
+  ["bowL",       "Bulge (muo)",     8,  140, 1,    42,   0],
+  ["bowR",       "Bulge (n)",       8,  140, 1,    75,   0],
+  ["waveHL",     "Arc height (muo)", 200, 820, 5,  210,   0],
+  ["waveHR",     "Arc height (n)",  200, 820, 5,   320,   0],
+  ["stepL",      "Spacing (muo)",   30, 150, 1,    72,   0],
+  ["stepR",      "Spacing (n)",     30, 150, 1,    70,   0],
+  ["coneL",      "Wave flare (muo)", 0,  1.5, 0.01, 1.33, 2],
+  ["coneR",      "Wave flare (n)",   0,  1.5, 0.01, 1.33, 2],
+  ["bumpL",      "Hump height (muo)", 0.2, 1.5, 0.01, 0.72, 2],
+  ["bumpR",      "Hump height (n)", 0.2,  1.5, 0.01, 0.75, 2],
+  ["slantL",     "Joiner slant (muo)", -0.5, 2.5, 0.05, 1.35, 2],
+  ["slantR",     "Joiner slant (n)", -0.5, 2.5, 0.05, 1.45, 2],
   ["driverFrac", "Driver size",   0.3,  1.3, 0.01, 1.3,  2],
-  ["gap",        "Driver gap",    -40,  140, 1,     6,   0],
-  ["artScale",   "Overall size",  0.3,  1.6, 0.01, 1.25, 2],
+  ["gapL",       "Driver gap (muo)", -40, 140, 1,   6,   0],
+  ["gapR",       "Driver gap (n)",  -40, 140, 1,  -27,   0],
+  ["artScale",   "Overall size",  0.3,  1.6, 0.01, 1.28, 2],
   ["gradMid",    "Gradient midpoint", 0.05, 0.95, 0.01, 0.55, 2],
   ["gradReach",  "Gradient reach",  0.3,  1.6, 0.01, 1.0,  2],
-  ["grain",      "Grain",           0,      1, 0.01, 0.01, 2],
-  ["grainSize",  "Grain size",    0.5,     24, 0.02, 0.8,  2],
+  ["grain",      "Grain",           0,      1, 0.01, 0,    2],
+  ["grainSize",  "Grain size",    0.5,     24, 0.02, 0.5,  2],
 ];
 
 // Set inner == mid == outer for a flat tint; set `grain` to 0 for no texture.
@@ -32,9 +44,9 @@ export const COLORS = [
   ["inner", "Gradient inner", "#fff715"],
   ["mid",   "Gradient mid",   "#ff23a7"],
   ["outer", "Gradient outer", "#f841ff"],
-  ["bg",    "Background",     "#000000"],
-  ["frame", "Driver ring",    "#000000"],
-  ["cap",   "Dust cap",       "#000000"],
+  ["bg",    "Background",     "#010020"],
+  ["frame", "Driver ring",    "#010020"],
+  ["cap",   "Dust cap",       "#010020"],
 ];
 
 export const DEFAULTS = Object.fromEntries([
@@ -43,10 +55,10 @@ export const DEFAULTS = Object.fromEntries([
   ["transparent", false],
 ]);
 
-/** Arc radius and half-span of the innermost stroke, for the lab's readout. */
+/** Arc radius and half-span of the innermost muo-side stroke, for the lab's readout. */
 export function derived(p) {
-  const hc = p.waveH / 2;
-  const r = (hc * hc + p.bow * p.bow) / (2 * p.bow);
+  const hc = p.waveHL / 2;
+  const r = (hc * hc + p.bowL * p.bowL) / (2 * p.bowL);
   return { radius: r, span: Math.asin(Math.min(1, hc / r)) * 180 / Math.PI };
 }
 
@@ -60,14 +72,25 @@ export function buildSVG(params, { fixedSize = true } = {}) {
   const p = { ...DEFAULTS, ...params };
   const cy = SIZE / 2;
   const f = (n) => n.toFixed(2);
-  const frameR = p.driverFrac * p.waveH / 2;
-  const offset = frameR + p.gap + p.bow;
-  const bumpPx = p.step * p.bump;
+  const frameR = p.driverFrac * DRIVER_BASE / 2;
+
+  // Every arc-shaping knob is split muo-side (left) / n-side (right); the driver,
+  // canvas and paint knobs stay shared. Each side's `offset` is where its
+  // innermost apex sits, measured out from the driver.
+  const side = {
+    left:  { stroke: p.strokeL, bow: p.bowL, waveH: p.waveHL, step: p.stepL,
+             cone: p.coneL, bump: p.bumpL, slant: p.slantL,
+             offset: frameR + p.gapL + p.bowL },
+    right: { stroke: p.strokeR, bow: p.bowR, waveH: p.waveHR, step: p.stepR,
+             cone: p.coneR, bump: p.bumpR, slant: p.slantR,
+             offset: frameR + p.gapR + p.bowR },
+  };
 
   /** Geometry of one arc, uniformly scaled by its distance from centre. */
   const strokeAt = (apexX, bulge) => {
-    const k = 1 + p.cone * (Math.abs(apexX) - offset) / offset;
-    const bow = p.bow * k, hc = p.waveH * k / 2;
+    const sp = side[bulge];
+    const k = 1 + sp.cone * (Math.abs(apexX) - sp.offset) / sp.offset;
+    const bow = sp.bow * k, hc = sp.waveH * k / 2;
     const r = (hc * hc + bow * bow) / (2 * bow);
     const half = Math.asin(Math.min(1, hc / r));
     return { x: apexX, bulge, bow, r, half, sinh: r * Math.sin(half) };
@@ -87,8 +110,10 @@ export function buildSVG(params, { fixedSize = true } = {}) {
   // Handles aim along the arc's own tangent at the joint, so the arch leans with
   // the legs (G1-smooth) instead of standing upright.
   const handle = (s, where) => {
+    const sp = side[s.bulge];
+    const bumpPx = sp.step * sp.bump;
     const [px, py] = end(s, where);
-    const ox = Math.sin(s.half) * p.slant * (s.bulge === "left" ? 1 : -1);
+    const ox = Math.sin(s.half) * sp.slant * (s.bulge === "left" ? 1 : -1);
     const oy = where === "top" ? -Math.cos(s.half) : Math.cos(s.half);
     return [px + bumpPx * ox, py + bumpPx * oy];
   };
@@ -100,8 +125,8 @@ export function buildSVG(params, { fixedSize = true } = {}) {
 
   const paint = "url(#muon-paint)";
 
-  const letter = (d) =>
-    `<path d="${d}" fill="none" stroke="${paint}" stroke-width="${p.stroke}" ` +
+  const letter = (d, strokeW) =>
+    `<path d="${d}" fill="none" stroke="${paint}" stroke-width="${strokeW}" ` +
     `stroke-linecap="round" stroke-linejoin="round"/>`;
 
   // One continuous path: up stroke a, over/under the hump, down stroke b — so the
@@ -111,7 +136,7 @@ export function buildSVG(params, { fixedSize = true } = {}) {
     const down = where === "top" ? ["top", "bottom"] : ["bottom", "top"];
     const start = end(a, up[0]);
     return letter(`M ${f(start[0])} ${f(start[1])} ${arc(a, ...up)} ` +
-                  `${hump(a, b, where)} ${arc(b, ...down)}`);
+                  `${hump(a, b, where)} ${arc(b, ...down)}`, side[a.bulge].stroke);
   };
 
   // Drawn in the parent's user space, not a nested scaled one, so the gradient's
@@ -145,10 +170,10 @@ export function buildSVG(params, { fixedSize = true } = {}) {
       `</filter></defs>`;
   };
 
-  const left = [0, 1, 2, 3].map((i) => -(offset + i * p.step));
-  const right = [0, 1].map((j) => offset + j * p.step);
+  const left = [0, 1, 2, 3].map((i) => -(side.left.offset + i * p.stepL));
+  const right = [0, 1].map((j) => side.right.offset + j * p.stepR);
   const dx = SIZE / 2 -
-    ((Math.min(...left) - p.stroke / 2) + (Math.max(...right) + p.stroke / 2)) / 2;
+    ((Math.min(...left) - p.strokeL / 2) + (Math.max(...right) + p.strokeR / 2)) / 2;
   const L = left.map((a) => strokeAt(a, "left"));
   const Rt = right.map((a) => strokeAt(a, "right"));
   for (const s of [...L, ...Rt]) s.x += dx;
@@ -159,7 +184,7 @@ export function buildSVG(params, { fixedSize = true } = {}) {
     join(Rt[0], Rt[1], "top") +              // 'n'
     driver(dx, frameR);                      // 'o'
 
-  const reach = p.gradReach * (Math.abs(Math.min(...left)) + p.stroke / 2);
+  const reach = p.gradReach * (Math.abs(Math.min(...left)) + p.strokeL / 2);
   const filter = p.grain > 0 ? ` filter="url(#muon-grain)"` : "";
   const rect = p.transparent ? "" : `<rect width="${SIZE}" height="${SIZE}" fill="${p.bg}"/>`;
   const size = fixedSize ? `width="${SIZE}" height="${SIZE}"` : `width="100%" height="100%"`;
