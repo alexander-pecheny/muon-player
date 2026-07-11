@@ -85,6 +85,9 @@ final class FFmpegDecoder {
         let stream = ctx.pointee.streams[Int(idx)]!
         timeBase = stream.pointee.time_base
 
+        let demuxer = ctx.pointee.iformat.flatMap { $0.pointee.name }.map { String(cString: $0) } ?? ""
+        let isMP4 = demuxer.contains("mp4") || demuxer.contains("mov")
+
         guard let cctx = avcodec_alloc_context3(decoder) else { throw DecodeError.codec("alloc") }
         codecCtx = cctx
         guard avcodec_parameters_to_context(cctx, stream.pointee.codecpar) >= 0 else {
@@ -107,15 +110,23 @@ final class FFmpegDecoder {
         // `iTunSMPB` tag it ignores entirely, so an edit-list-less m4a decodes
         // with priming at the head and padding at the tail — audible as a gap
         // and a click at every album transition.
+        let streamSamples = av_rescale_q(stream.pointee.duration, timeBase,
+                                         AVRational(num: 1, den: inSampleRate))
+
         if let g = GaplessInfo.read(ctx.pointee.metadata, stream.pointee.metadata) {
             duration = Double(g.validSamples) / Double(inSampleRate)
             targetOutputFrames = rescaleToCanonical(g.validSamples)
 
-            let streamSamples = av_rescale_q(stream.pointee.duration, timeBase,
-                                             AVRational(num: 1, den: inSampleRate))
             if !g.ffmpegAlreadyTrims(streamDurationInSamples: streamSamples) {
                 primingInputSamples = g.priming
             }
+        } else if isMP4, streamSamples > 0 {
+            // An edit list gets FFmpeg to drop the priming and to report the true
+            // duration — but not to stop decoding at it, so the trailing padding
+            // still plays. Only mp4 gets this cap: there the duration comes from
+            // the sample tables and is exact, while a Xing-less VBR mp3 only has a
+            // guess from the bitrate, and capping to that would cut real music.
+            targetOutputFrames = rescaleToCanonical(streamSamples)
         }
         skipUntilInputSample = primingInputSamples
 
