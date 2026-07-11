@@ -43,6 +43,7 @@ struct Options {
     var db: String = NSHomeDirectory()
         + "/Library/Containers/me.pecheny.muonplayer/Data/Library/Application Support/muon-library.sqlite"
     var json = false
+    var html = false
     var verbose = false
     /// Only look at tracks whose path contains this (case-insensitive).
     var filter: String?
@@ -57,6 +58,11 @@ struct Options {
     /// Silence between two hard-cut edges up to this long is encoder padding, not
     /// an intended pause. Covers AAC's 2112 priming samples (48 ms at 44.1k).
     var padMs = 60.0
+    /// A seam whose quieter side reaches this is a *loud* one — two tracks running
+    /// into each other at full tilt, which is the transition worth knowing about. The
+    /// rest are real seams too, but a pair of ambient tails touching is a quieter
+    /// thing than the album's big joins.
+    var loudDb = -25.0
     /// The step at the splice must be this many times the largest step the music
     /// itself makes nearby before it counts as a click.
     var clickRatio = 8.0
@@ -74,9 +80,11 @@ func parseOptions() -> Options {
     while let arg = it.next() {
         switch arg {
         case "--json": o.json = true
+        case "--html": o.html = true
         case "--verbose", "-v": o.verbose = true
         case "--db": o.db = it.next() ?? o.db
         case "--filter": o.filter = it.next()
+        case "--loud-db": o.loudDb = Double(it.next() ?? "") ?? o.loudDb
         case "--silence-db": o.silenceDb = Double(it.next() ?? "") ?? o.silenceDb
         case "--min-edge-db": o.minEdgeDb = Double(it.next() ?? "") ?? o.minEdgeDb
         case "--gap-ms": o.gapMs = Double(it.next() ?? "") ?? o.gapMs
@@ -91,6 +99,9 @@ func parseOptions() -> Options {
 
               --verbose, -v       list clean seams as well as broken ones
               --json              emit the findings as JSON
+              --html              emit the findings as a standalone HTML report
+              --loud-db N         a seam this loud on its quieter side is a loud one
+                                  (default -25)
               --filter TEXT       only tracks whose path contains TEXT
               --db PATH           library database
               --gap-ms N          silence at a seam still counted as flowing (default 10)
@@ -241,17 +252,51 @@ struct Audio {
     }
 }
 
+/// Decodes that never happened. A scan that quietly skips a file reports a clean
+/// library, which is worse than no scan at all, so this is counted and shouted about
+/// at the end rather than swallowed.
+final class Failures: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var count = 0
+    private(set) var last = ""
+
+    func record(_ error: String) {
+        lock.lock(); count += 1; last = error; lock.unlock()
+    }
+}
+let failures = Failures()
+
+/// Foundation hands the child its end of the pipe and leaves the parent's copy for
+/// the autorelease pool to clean up. Spawn ffmpeg twenty thousand times from a tight
+/// concurrent loop and the file descriptors pile up until `Process.run()` starts
+/// throwing EBADF — which is exactly how an earlier version of this script came to
+/// drop two thirds of the library and call it a clean bill of health. So: a pool per
+/// call, both ends closed by hand, and a retry for good measure.
 func run(_ args: [String]) -> Data {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    p.arguments = args
-    let out = Pipe()
-    p.standardOutput = out
-    p.standardError = FileHandle.nullDevice
-    do { try p.run() } catch { return Data() }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    return data
+    for attempt in 0 ..< 3 {
+        let result: Data? = autoreleasepool {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            p.arguments = args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            defer {
+                try? out.fileHandleForReading.close()
+                try? out.fileHandleForWriting.close()
+            }
+            do { try p.run() } catch {
+                if attempt == 2 { failures.record("\(error)") }
+                return nil
+            }
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return data
+        }
+        if let result { return result }
+        usleep(50_000 << attempt)
+    }
+    return Data()
 }
 
 /// ffmpeg piping WAV can't backfill the chunk sizes, so they arrive as 0xFFFFFFFF
@@ -425,6 +470,13 @@ struct Finding {
     let ratio: Double
     let step: Double
     let note: String
+
+    /// How loud the seam is: the quieter of its two sides, since a transition is only
+    /// as striking as its weaker half. A song crashing straight into the next one is a
+    /// different thing from two ambient outros touching, and it is the one worth
+    /// hearing — so the two are told apart rather than piled together.
+    var levelDb: Double { min(tailDb, headDb) }
+    var isLoud: Bool { levelDb >= opts.loudDb }
 }
 
 func judge(_ seam: Seam, tail: Audio, head: Audio) -> Finding? {
@@ -509,10 +561,169 @@ DispatchQueue.concurrentPerform(iterations: work.count) { s in
 }
 if isTTY, !opts.json { FileHandle.standardError.write("\r\u{1B}[K".data(using: .utf8)!) }
 
+// A scan that skipped files silently would report a library cleaner than it is.
+if failures.count > 0 {
+    FileHandle.standardError.write("""
+    WARNING: \(failures.count) of \(work.count * 2) decodes did not run (\(failures.last)).
+    The report below is INCOMPLETE — those seams were never looked at.
+
+    """.data(using: .utf8)!)
+}
+
 // MARK: - Report
 
 func label(_ t: Track) -> String {
     t.number > 0 ? String(format: "%02d", t.number) : (t.path as NSString).lastPathComponent
+}
+
+// MARK: - HTML report
+
+func escape(_ s: String) -> String {
+    s.replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;")
+        .replacingOccurrences(of: "\"", with: "&quot;")
+}
+
+/// One page, no assets, opens anywhere. Albums are ranked by their loudest seam,
+/// because that is the order in which a person would want to hear them.
+func html(_ findings: [Finding], albums: Int) -> String {
+    let groups = Dictionary(grouping: findings) { "\($0.album.directory)\u{1}\($0.album.disc)" }
+        .values
+        .map { $0.sorted { ($0.from.number, $0.from.path) < ($1.from.number, $1.from.path) } }
+        .sorted { a, b in
+            let (la, lb) = (a.contains(where: \.isLoud), b.contains(where: \.isLoud))
+            if la != lb { return la }
+            return (a[0].album.artist, a[0].album.album) < (b[0].album.artist, b[0].album.album)
+        }
+
+    let loud = findings.filter(\.isLoud)
+    let broken = findings.filter { $0.kind != .flow }
+    let loudAlbums = groups.filter { $0.contains(where: \.isLoud) }.count
+    func percent(_ n: Int) -> String {
+        albums == 0 ? "—" : String(format: "%.0f%%", Double(n) / Double(albums) * 100)
+    }
+
+    var rows = ""
+    for group in groups {
+        let a = group[0].album
+        let isLoud = group.contains(where: \.isLoud)
+        let chips = group.map { f -> String in
+            let cls = f.kind == .click ? "click" : f.kind == .gap ? "gap" : (f.isLoud ? "loud" : "quiet")
+            let arrow = f.wrap ? "↻" : "→"
+            let no = { (t: Track) in t.number > 0 ? String(t.number) : "•" }
+            let detail = f.kind == .gap
+                ? String(format: "%.0f ms of silence", f.gapMs)
+                : String(format: "step %.1f×", f.ratio)
+            let title = String(format: "%@ %@ %@  —  %.0f dB, %@%@",
+                               escape(f.from.title), arrow, escape(f.to.title),
+                               f.levelDb, detail, f.note.isEmpty ? "" : ", \(escape(f.note))")
+            return "<span class=\"chip \(cls)\" title=\"\(title)\">\(no(f.from))\(arrow)\(no(f.to))</span>"
+        }.joined()
+
+        let codecs = Set(group.map(\.from.codec)).sorted().joined(separator: "/")
+        rows += """
+        <tr data-loud="\(isLoud)" data-broken="\(group.contains { $0.kind != .flow })">
+          <td class="artist">\(escape(a.artist.isEmpty ? "—" : a.artist))</td>
+          <td class="album">\(escape(a.album.isEmpty ? "—" : a.album))\(a.disc > 1 ? " <em>disc \(a.disc)</em>" : "")
+              <div class="path">\(escape(a.directory))</div></td>
+          <td class="seams">\(chips)</td>
+          <td class="codec">\(escape(codecs))</td>
+        </tr>
+
+        """
+    }
+
+    return """
+    <!doctype html>
+    <meta charset="utf-8">
+    <title>Gapless transitions</title>
+    <style>
+      :root { color-scheme: light dark; --bg:#fff; --fg:#1a1a1a; --dim:#767676; --line:#e3e3e3;
+              --loud:#8b2fc9; --quiet:#9a9a9a; --gap:#b26a00; --click:#c62828; --card:#fafafa; }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg:#16161a; --fg:#e8e8ea; --dim:#8e8e96; --line:#2c2c33;
+                --loud:#c58af9; --quiet:#70707a; --gap:#e2a03f; --click:#ff6b6b; --card:#1d1d22; }
+      }
+      body { margin:0; padding:2.5rem 1.5rem; background:var(--bg); color:var(--fg);
+             font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      main { max-width:1100px; margin:0 auto; }
+      h1 { font-size:1.5rem; margin:0 0 .25rem; }
+      .sub { color:var(--dim); margin:0 0 1.5rem; }
+      .stats { display:flex; gap:.75rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+      .stat { background:var(--card); border:1px solid var(--line); border-radius:10px;
+              padding:.6rem .9rem; min-width:5.5rem; }
+      .stat b { display:block; font-size:1.35rem; }
+      .stat i { font-style:normal; color:var(--dim); font-size:.95rem; }
+      .stat span { color:var(--dim); font-size:.8rem; }
+      .controls { margin-bottom:1rem; color:var(--dim); font-size:.9rem; }
+      .controls label { margin-right:1rem; }
+      table { width:100%; border-collapse:collapse; }
+      th { text-align:left; font-size:.75rem; text-transform:uppercase; letter-spacing:.06em;
+           color:var(--dim); border-bottom:1px solid var(--line); padding:.5rem .6rem; font-weight:600; }
+      td { padding:.6rem; border-bottom:1px solid var(--line); vertical-align:top; }
+      .artist { font-weight:600; white-space:nowrap; }
+      .album em { color:var(--dim); font-style:normal; font-size:.85em; }
+      .path { color:var(--dim); font-size:.72rem; margin-top:.15rem; word-break:break-all; }
+      .codec { color:var(--dim); font-size:.8rem; white-space:nowrap; }
+      .seams { line-height:2; }
+      .chip { display:inline-block; padding:.05rem .45rem; margin:0 .25rem .25rem 0; border-radius:999px;
+              font:600 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; cursor:help;
+              border:1px solid transparent; }
+      .chip.loud  { background:color-mix(in srgb, var(--loud) 16%, transparent); color:var(--loud);
+                    border-color:color-mix(in srgb, var(--loud) 35%, transparent); }
+      .chip.quiet { color:var(--quiet); border-color:var(--line); }
+      .chip.gap   { background:color-mix(in srgb, var(--gap) 16%, transparent); color:var(--gap);
+                    border-color:color-mix(in srgb, var(--gap) 40%, transparent); }
+      .chip.click { background:color-mix(in srgb, var(--click) 16%, transparent); color:var(--click);
+                    border-color:color-mix(in srgb, var(--click) 40%, transparent); }
+      .legend { margin-top:2rem; color:var(--dim); font-size:.85rem; }
+      .legend .chip { cursor:default; }
+      tr.hide { display:none; }
+    </style>
+    <main>
+      <h1>Gapless transitions</h1>
+      <p class="sub">Where one track runs straight into the next — \(albums) albums scanned.
+         Hover a seam for its level and detail.</p>
+
+      <div class="stats">
+        <div class="stat"><b>\(albums)</b><span>albums in the library</span></div>
+        <div class="stat"><b>\(groups.count) <i>\(percent(groups.count))</i></b><span>with any seam</span></div>
+        <div class="stat"><b>\(loudAlbums) <i>\(percent(loudAlbums))</i></b><span>with a loud seam</span></div>
+        <div class="stat"><b>\(loud.count)</b><span>loud seams</span></div>
+        <div class="stat"><b>\(findings.count - loud.count)</b><span>quiet seams</span></div>
+        <div class="stat"><b>\(broken.count)</b><span>broken</span></div>
+      </div>
+
+      <div class="controls">
+        <label><input type="checkbox" id="onlyLoud"> only albums with a loud seam</label>
+        <label><input type="checkbox" id="onlyBroken"> only albums with a broken seam</label>
+      </div>
+
+      <table>
+        <thead><tr><th>Artist</th><th>Album</th><th>Transitions</th><th>Format</th></tr></thead>
+        <tbody>
+    \(rows)    </tbody>
+      </table>
+
+      <p class="legend">
+        <span class="chip loud">3→4</span> loud — both sides at \(Int(opts.loudDb)) dB or above, the ones you notice &nbsp;
+        <span class="chip quiet">3→4</span> quiet — a real seam, but a gentle one &nbsp;
+        <span class="chip gap">3→4</span> broken by encoder padding &nbsp;
+        <span class="chip click">3→4</span> the edges do not meet: a click &nbsp;
+        <span class="chip quiet">10↻1</span> the album's loop back to track one
+      </p>
+    </main>
+    <script>
+      const rows = [...document.querySelectorAll('tbody tr')];
+      const loud = document.getElementById('onlyLoud');
+      const broken = document.getElementById('onlyBroken');
+      const apply = () => rows.forEach(r => r.classList.toggle('hide',
+        (loud.checked && r.dataset.loud !== 'true') ||
+        (broken.checked && r.dataset.broken !== 'true')));
+      loud.onchange = broken.onchange = apply;
+    </script>
+    """
 }
 
 if opts.json {
@@ -527,12 +738,18 @@ if opts.json {
             "wrap": f.wrap,
             "codec": f.from.codec,
             "tailDb": f.tailDb, "headDb": f.headDb,
+            "levelDb": f.levelDb, "loud": f.isLoud,
             "gapMs": f.gapMs, "stepRatio": f.ratio, "step": f.step,
             "note": f.note,
         ]
     }
     let data = try! JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
     print(String(data: data, encoding: .utf8)!)
+    exit(0)
+}
+
+if opts.html {
+    print(html(findings, albums: library.count))
     exit(0)
 }
 
@@ -568,9 +785,16 @@ for key in byAlbum.keys.sorted() {
 
 let clicks = findings.filter { $0.kind == .click }.count
 let gaps = findings.filter { $0.kind == .gap }.count
+let loudCount = findings.filter(\.isLoud).count
+let loudAlbums = Set(findings.filter(\.isLoud).map { "\($0.album.directory)\u{1}\($0.album.disc)" }).count
+func percent(_ n: Int) -> String {
+    library.isEmpty ? "—" : String(format: "%.0f%%", Double(n) / Double(library.count) * 100)
+}
 print("""
 
-scanned \(library.count) albums — \(findings.count) seamless transitions in \(albumsWithSeams) albums, \
+\(library.count) albums — \(albumsWithSeams) (\(percent(albumsWithSeams))) have a seam, \
+\(loudAlbums) (\(percent(loudAlbums))) have a loud one
+\(findings.count) seamless transitions: \(loudCount) loud, \(findings.count - loudCount) quiet — \
 \(clicks) with a click, \(gaps) broken by encoder padding
 """)
 if !opts.verbose, clicks + gaps == 0 { print("(nothing broken; --verbose lists the clean seams)") }

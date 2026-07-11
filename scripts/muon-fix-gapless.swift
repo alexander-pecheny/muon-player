@@ -122,8 +122,11 @@ func restore(from dir: String) -> Never {
     var restored = 0
     for e in entries {
         do {
-            _ = try fm.replaceItemAt(URL(fileURLWithPath: e.path),
-                                     withItemAt: URL(fileURLWithPath: e.backup))
+            // Copied back, not moved: `replaceItemAt` would consume the backup, leaving
+            // the directory a manifest with nothing behind it — and a backup you can
+            // only use once is a trap, not a safety net.
+            let original = try Data(contentsOf: URL(fileURLWithPath: e.backup))
+            try original.write(to: URL(fileURLWithPath: e.path), options: .atomic)
             restored += 1
         } catch {
             print("FAILED \(e.path) — \(error)")
@@ -166,48 +169,74 @@ func readPlan() -> (seams: [Seam], otherFormats: Int) {
 /// there, and the tag values follow from it without the length of the whole file.
 let windowSeconds = 0.5
 
+/// Foundation leaves the parent's end of the pipe to the autorelease pool, so a tight
+/// loop of spawns runs the process out of file descriptors and `run()` starts throwing
+/// EBADF. A pool per call, both ends closed by hand, and a retry — a decode that
+/// silently did not happen would leave a file unfixed and unreported.
+/// Both channels, kept apart. A click can live in one of them and all but vanish in a
+/// mono mixdown — which is how three of them once slipped past the check below and
+/// into the library.
+let channels = 2
+
 func decodeEdge(_ path: String, tail: Bool) -> [Float]? {
     let seconds = String(format: "%.3f", windowSeconds)
     var args = ["ffmpeg", "-v", "error", "-nostdin"]
     args += tail ? ["-sseof", "-\(seconds)", "-i", path] : ["-i", path, "-t", seconds]
-    args += ["-map", "0:a:0", "-ac", "1", "-f", "f32le", "-"]
+    args += ["-map", "0:a:0", "-ac", "\(channels)", "-f", "f32le", "-"]
 
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    p.arguments = args
-    let out = Pipe()
-    p.standardOutput = out
-    p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else { return nil }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    guard data.count >= 4 else { return nil }
-    return data.withUnsafeBytes { raw in
-        (0 ..< data.count / 4).map {
-            Float(bitPattern: raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))
+    for attempt in 0 ..< 3 {
+        let data: Data? = autoreleasepool {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            p.arguments = args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            defer {
+                try? out.fileHandleForReading.close()
+                try? out.fileHandleForWriting.close()
+            }
+            guard (try? p.run()) != nil else { return nil }
+            let d = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return d
+        }
+        guard let data else { usleep(50_000 << attempt); continue }
+        guard data.count >= 4 else { return nil }
+        return data.withUnsafeBytes { raw in
+            (0 ..< data.count / 4).map {
+                Float(bitPattern: raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))
+            }
         }
     }
+    return nil
 }
 
 /// How hard the waveform steps where the two trimmed edges would meet, measured
-/// against how hard the music steps either side of it — the same test the scanner
-/// uses to call a seam clicky.
+/// against how hard the music steps either side of it — the same test, channel by
+/// channel, that the scanner uses to call a seam clicky. The worst channel decides.
 func joinStep(tail: [Float], trail: Int, head: [Float], lead: Int) -> (ratio: Double, step: Double)? {
     let look = 882                                            // 20 ms
-    let a = tail.count - trail, b = lead
-    guard a > look, b + look < head.count, a <= tail.count else { return nil }
+    let endFrame = tail.count / channels - trail
+    guard endFrame > look, lead + look < head.count / channels else { return nil }
 
-    let left = Array(tail[(a - look) ..< a]), right = Array(head[b ..< (b + look)])
-    guard let last = left.last, let first = right.first else { return nil }
+    var worstRatio = 0.0, worstStep = 0.0
+    for c in 0 ..< channels {
+        let left = ((endFrame - look) ..< endFrame).map { tail[$0 * channels + c] }
+        let right = (lead ..< (lead + look)).map { head[$0 * channels + c] }
+        guard let last = left.last, let first = right.first else { continue }
 
-    var deltas: [Double] = []
-    for side in [left, right] {
-        for i in 1 ..< side.count { deltas.append(abs(Double(side[i] - side[i - 1]))) }
+        var deltas: [Double] = []
+        for side in [left, right] {
+            for i in 1 ..< side.count { deltas.append(abs(Double(side[i] - side[i - 1]))) }
+        }
+        deltas.sort()
+        let p99 = deltas[min(deltas.count - 1, Int(Double(deltas.count) * 0.99))]
+        let step = abs(Double(first - last))
+        let ratio = step / max(p99, 1e-5)
+        if ratio > worstRatio { worstRatio = ratio; worstStep = step }
     }
-    deltas.sort()
-    let p99 = deltas[min(deltas.count - 1, Int(Double(deltas.count) * 0.99))]
-    let step = abs(Double(first - last))
-    return (step / max(p99, 1e-5), step)
+    return (worstRatio, worstStep)
 }
 
 func sampleRate(_ path: String) -> Int? {
@@ -238,9 +267,14 @@ func sampleRate(_ path: String) -> Int? {
 /// Erring low only leaves a little padding behind, which is the harmless direction —
 /// erring high would cut into the music.
 func bounds(_ x: [Float], floor: Float = 1.5e-3) -> (lead: Int, trail: Int) {
-    let lead = x.firstIndex { abs($0) > floor } ?? x.count
-    let last = x.lastIndex { abs($0) > floor } ?? -1
-    return (lead, x.count - (last + 1))
+    let frames = x.count / channels
+    func sounding(_ f: Int) -> Bool {
+        (0 ..< channels).contains { abs(x[f * channels + $0]) > floor }
+    }
+    guard let first = (0 ..< frames).first(where: sounding),
+          let last = (0 ..< frames).reversed().first(where: sounding)
+    else { return (frames, frames) }
+    return (first, frames - (last + 1))
 }
 
 // MARK: - What each seam needs
@@ -297,9 +331,11 @@ func consider(_ s: Seam, opts: Options) -> SeamFix? {
     // gone, closing the seam does not make it seamless — it trades a gap you can hear
     // for a click you can hear. That happens when the split lost samples rather than
     // merely padding them, and no header can put those samples back.
+    // Refused a little below the level at which the scanner would call it a click, so
+    // that a seam sitting right on the line does not sneak across it.
     if let join = joinStep(tail: before.samples, trail: before.silence,
                            head: after.samples, lead: after.silence),
-       join.ratio >= 8, join.step >= 0.02 {
+       join.ratio >= 6, join.step >= 0.02 {
         return refuse(String(format: "the edges do not meet — closing it would step %.1f× (%.3f), a click",
                              join.ratio, join.step))
     }

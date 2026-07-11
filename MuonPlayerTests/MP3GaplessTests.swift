@@ -65,6 +65,21 @@ struct MP3GaplessTests {
         #expect(out.prefix(20) == file.prefix(20))
     }
 
+    /// The frame count is what FFmpeg computes the end-trim window from, so counting
+    /// one frame short leaves the trailing padding playing — the very thing the header
+    /// is written to remove. The last frame has nothing behind it but the trailing tag,
+    /// and it must be counted all the same.
+    @Test("the last frame is counted even behind a trailing tag")
+    func countsLastFrameBeforeTrailer() throws {
+        for trailer in [Data("TAG".utf8) + Data(repeating: 0x20, count: 125),   // ID3v1, 128 bytes
+                        Data("APETAGEX".utf8) + Data(repeating: 0, count: 500)] {
+            var file = mp3(frames: 7)
+            file.append(trailer)
+            let (_, tag) = try roundTrip(file, delay: 576, padding: 1234)
+            #expect(tag?.frames == 7)
+        }
+    }
+
     @Test("the 12-bit fields are respected")
     func rejectsOversizedValues() {
         #expect(TagWriter.MP3Gapless(delay: 576, padding: 1234, frames: 1).fitsInTag)
