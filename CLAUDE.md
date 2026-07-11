@@ -63,7 +63,7 @@ xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer \
 Tests use **Swift Testing** (`@Test`/`#expect`), not XCTest. The XCTest summary
 line prints `Executed 0 tests` — that's expected; the real results are the
 `✔ Test …` / `✔ Test run with N tests in M suites passed` lines (currently
-22 tests in 4 suites).
+58 tests in 13 suites).
 
 ## Build & run the Mac app
 
@@ -186,6 +186,84 @@ swiftc -O scripts/muon-albumartist.swift MuonPlayer/Library/TagWriter.swift \
 /tmp/muon-albumartist --prefix SOULOUD             # dry run (default)
 /tmp/muon-albumartist --prefix SOULOUD --apply
 ```
+
+`scripts/muon-gapless.swift` finds the album transitions meant to be seamless, and
+the ones that are meant to be but aren't. It reads the library DB, then decodes the
+last and first 500 ms of each adjacent pair through the `ffmpeg` CLI — the same
+decoder the app plays through, so a defect it finds is one you would hear.
+
+```bash
+swiftc -O scripts/muon-gapless.swift -o /tmp/muon-gapless && /tmp/muon-gapless
+swift scripts/muon-gapless.swift --json --filter "Pink Floyd"   # slow: unoptimized
+python3 scripts/test-muon-gapless.py                            # synthetic suite
+```
+
+Compile it — in `swift`'s interpreter the per-sample loops are ~10× slower. Work is
+fanned out one seam per core (a seam's two decodes are shared with no other seam);
+a 12.7k-track library takes under a minute.
+
+Only a transition where **both** files are still sounding at the seam is reported —
+the usual fade-to-silence boundary is skipped, which is what keeps the report short.
+Of those, three verdicts:
+
+- **flow** — the music runs straight through.
+- **CLICK** — the waveform steps at the splice by far more than the music itself
+  steps nearby (`--click-ratio`, default 8× the local 99th-percentile sample delta).
+  A mistrimmed lossy encode, or a rip split at a non-zero crossing.
+- **GAP** — both files are cut off mid-note, yet the decoder still puts 10–60 ms of
+  silence between them (`--gap-ms`…`--pad-ms`). That is the encoder delay surviving
+  into playback: mp3 with no LAME/Xing header ≈ 25 ms, AAC with no iTunSMPB ≈ 48 ms.
+
+The thresholds all have flags; `--min-edge-db` (default −50) is the one that keeps a
+fade-out that merely stops short of digital zero from being read as a hard cut. The
+last→first seam is checked too — an album written to loop (Origami Angel's
+*Somewhere City*) joins it as carefully as any seam inside it.
+
+`scripts/muon-fix-gapless.swift` repairs the **MP3** side of what the scan finds, by
+writing the encoder delay/padding the files should have carried. It takes the
+scanner's JSON, and for each GAP seam gives the track before it a trailing padding
+and the track after it a delay. Only the Xing/Info header frame is rewritten; audio
+frames and ID3 tags are copied byte for byte (`TagWriter.writeMP3Gapless`).
+
+```bash
+swiftc -O scripts/muon-fix-gapless.swift MuonPlayer/Library/TagWriter.swift \
+  -o /tmp/muon-fix-gapless
+/tmp/muon-gapless --json > /tmp/plan.json
+/tmp/muon-fix-gapless --plan /tmp/plan.json                    # dry run (default)
+/tmp/muon-fix-gapless --plan /tmp/plan.json --apply
+/tmp/muon-fix-gapless --restore ~/.muon-gapless-backups/<stamp>
+```
+
+Only MP3 is repairable by tag, and the reason is worth knowing before reaching for
+any of this:
+
+- **MP3** carries its gapless data in the LAME extension of the Xing/Info header — an
+  MPEG frame in front of the audio, not a tag — and FFmpeg honours it (`delay + 529`
+  skipped at the head, `padding` at the tail; the 529 is the decoder's own). Most
+  broken files have no such header at all; some have one that lies. Both are handled:
+  the measurement is read against whatever FFmpeg *already* trims, so an existing
+  header is corrected rather than added to.
+- **m4a/AAC** files are almost never the problem. They already carry the truth — an
+  edit list, or Apple's `iTunSMPB` — and FFmpeg applies the *head* trim from it while
+  ignoring the tail (`mov.c` reads only `priming` from iTunSMPB, and never trims to
+  the edit-list duration). That is fixed in the player, not the file, by
+  `FFmpegDecoder`'s `targetOutputFrames`. Writing tags into these files would achieve
+  nothing.
+- **FLAC/Opus/Vorbis** gaps are real silence in the audio. No tag takes that back.
+
+Two rules keep it from making a library worse. Silence longer than the 12-bit LAME
+fields can express (4095 samples ≈ 93 ms) is silence somebody *meant*, and is left
+alone. And a seam is only closed if the two edges actually meet: if trimming the
+padding would leave a step big enough to hear, the seam is refused with a reason,
+because a click is no improvement on a gap — that happens when the split lost samples
+rather than merely padding them, and no header can put them back.
+
+The trim is measured to the sample, which it has to be: at full level a third of a
+millisecond of slop is already a step of ~0.08, i.e. an audible tick. Every touched
+file is copied whole into `~/.muon-gapless-backups/<stamp>` first (the header frame
+shifts everything behind it, so there is nothing smaller to keep), each write is
+verified by decoding the result, and anything that does not come back clean is
+restored on the spot. `--restore` puts a whole run back, byte for byte.
 
 `scripts/muon-cloud-sync.swift` re-encodes any FLAC that is not 16-bit (halving
 the rate inside its own family: 96k→48k, 88.2k→44.1k) and uploads whatever the

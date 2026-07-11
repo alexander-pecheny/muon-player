@@ -1,0 +1,461 @@
+//
+//  muon-fix-gapless — repair the MP3s whose gapless transitions are broken, by
+//  giving them the encoder delay/padding they should have carried all along.
+//
+//  It takes the plan `muon-gapless --json` writes, and for every GAP seam in it
+//  fixes the two files that meet at the seam: the one before it gets its trailing
+//  padding declared, the one after it its encoder delay. Only the Xing/Info header
+//  frame is rewritten — every audio frame, and every ID3 tag, is copied through
+//  byte for byte (TagWriter does the writing, atomically).
+//
+//  Only MP3 is repairable this way. The m4a files in a library carry their gapless
+//  data already — an edit list, or Apple's iTunSMPB — and FFmpeg ignores the tail
+//  trim in both, so those seams are fixed in the player, not in the file. FLAC,
+//  Opus and Vorbis gaps are real silence in the audio, which no tag can take back.
+//
+//  The values are derived, not assumed. Each file is decoded and measured, and the
+//  measurement is read against whatever FFmpeg already trims for the file today —
+//  so a header that is simply missing and a header that is present but lying are
+//  both handled, and neither ends up double-counted.
+//
+//  Nothing is written without --apply, every touched file is copied into a backup
+//  tree first, and each write is verified by decoding the result: a file that does
+//  not come back clean is restored from its backup on the spot.
+//
+//  Usage:
+//    swiftc -O scripts/muon-fix-gapless.swift MuonPlayer/Library/TagWriter.swift \
+//      -o /tmp/muon-fix-gapless
+//    /tmp/muon-gapless --json > /tmp/plan.json
+//    /tmp/muon-fix-gapless --plan /tmp/plan.json                 # dry run (default)
+//    /tmp/muon-fix-gapless --plan /tmp/plan.json --apply
+//    /tmp/muon-fix-gapless --restore ~/.muon-gapless-backups/<stamp>
+//
+
+import Foundation
+
+/// Mirrors the app's TagEdits so this script needs no part of the app but TagWriter.
+struct TagEdits: Sendable {
+    var title: String?
+    var artist: String?
+    var album: String?
+    var albumArtist: String?
+    var trackNo: Int?
+    var composer: String?
+    var year: Int?
+}
+
+// MARK: - Options
+
+struct Options {
+    var plan: String?
+    var apply = false
+    var verbose = false
+    var restore: String?
+    var backupRoot = NSHomeDirectory() + "/.muon-gapless-backups"
+    /// The decoder's own delay, which every writer of the LAME field has already
+    /// taken off: FFmpeg skips `delay + 529`.
+    let decoderDelay = 529
+    /// Silence longer than this at a seam is not encoder padding — it is silence
+    /// somebody meant to be there, and it is left alone. The 12-bit LAME fields
+    /// cannot express more than 4095 samples anyway.
+    var maxPadSamples = 4095
+    var jobs = ProcessInfo.processInfo.activeProcessorCount
+}
+
+func parseOptions() -> Options {
+    var o = Options()
+    var it = CommandLine.arguments.dropFirst().makeIterator()
+    while let arg = it.next() {
+        switch arg {
+        case "--plan": o.plan = it.next()
+        case "--apply": o.apply = true
+        case "--dry-run": o.apply = false
+        case "--verbose", "-v": o.verbose = true
+        case "--restore": o.restore = it.next()
+        case "--backup-dir": o.backupRoot = it.next() ?? o.backupRoot
+        case "--jobs", "-j": o.jobs = Int(it.next() ?? "") ?? o.jobs
+        case "--help", "-h":
+            print("""
+            muon-fix-gapless — write the missing/wrong encoder delay into broken MP3s.
+
+              --plan FILE       the JSON `muon-gapless --json` wrote  (required)
+              --apply           write; without it, only report
+              --restore DIR     put every file in a backup directory back
+              --backup-dir DIR  where backups go (default ~/.muon-gapless-backups)
+              --verbose         show the files that need no change
+              --jobs, -j N      parallel workers
+            """)
+            exit(0)
+        default:
+            FileHandle.standardError.write("unknown argument: \(arg)\n".data(using: .utf8)!)
+            exit(2)
+        }
+    }
+    return o
+}
+
+let opts = parseOptions()
+let fm = FileManager.default
+
+func fail(_ msg: String) -> Never {
+    FileHandle.standardError.write((msg + "\n").data(using: .utf8)!)
+    exit(1)
+}
+
+// MARK: - Restore
+
+struct BackupEntry: Codable {
+    let path: String
+    let backup: String
+    let delayBefore: Int
+    let paddingBefore: Int
+    let delayAfter: Int
+    let paddingAfter: Int
+}
+
+func restore(from dir: String) -> Never {
+    let manifest = URL(fileURLWithPath: dir).appendingPathComponent("manifest.json")
+    guard let data = try? Data(contentsOf: manifest),
+          let entries = try? JSONDecoder().decode([BackupEntry].self, from: data)
+    else { fail("no manifest at \(manifest.path)") }
+
+    var restored = 0
+    for e in entries {
+        do {
+            _ = try fm.replaceItemAt(URL(fileURLWithPath: e.path),
+                                     withItemAt: URL(fileURLWithPath: e.backup))
+            restored += 1
+        } catch {
+            print("FAILED \(e.path) — \(error)")
+        }
+    }
+    print("restored \(restored)/\(entries.count) files from \(dir)")
+    exit(0)
+}
+
+// MARK: - The plan
+
+struct Seam: Decodable {
+    let kind: String
+    let from: String
+    let to: String
+    let artist: String
+    let album: String
+    let codec: String
+}
+
+/// Only a seam whose two files are both MP3 can be closed by a header — and only the
+/// end a seam actually implicates is ever trimmed, so a track whose head follows a
+/// real pause keeps its leading silence, whatever the encoder put there.
+func readPlan() -> (seams: [Seam], otherFormats: Int) {
+    guard let planPath = opts.plan else { fail("need --plan (the JSON from muon-gapless --json)") }
+    guard let planData = try? Data(contentsOf: URL(fileURLWithPath: planPath)),
+          let all = try? JSONDecoder().decode([Seam].self, from: planData)
+    else { fail("cannot read the plan at \(planPath)") }
+
+    func isMP3(_ p: String) -> Bool { p.lowercased().hasSuffix(".mp3") }
+
+    let gaps = all.filter { $0.kind == "gap" }
+    let mine = gaps.filter { isMP3($0.from) && isMP3($0.to) }
+    return (mine, gaps.count - mine.count)
+}
+
+// MARK: - Decoding
+
+/// Only the half-second at one end of a file is ever needed: the trim is the silence
+/// there, and the tag values follow from it without the length of the whole file.
+let windowSeconds = 0.5
+
+func decodeEdge(_ path: String, tail: Bool) -> [Float]? {
+    let seconds = String(format: "%.3f", windowSeconds)
+    var args = ["ffmpeg", "-v", "error", "-nostdin"]
+    args += tail ? ["-sseof", "-\(seconds)", "-i", path] : ["-i", path, "-t", seconds]
+    args += ["-map", "0:a:0", "-ac", "1", "-f", "f32le", "-"]
+
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    p.arguments = args
+    let out = Pipe()
+    p.standardOutput = out
+    p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return nil }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    guard data.count >= 4 else { return nil }
+    return data.withUnsafeBytes { raw in
+        (0 ..< data.count / 4).map {
+            Float(bitPattern: raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))
+        }
+    }
+}
+
+/// How hard the waveform steps where the two trimmed edges would meet, measured
+/// against how hard the music steps either side of it — the same test the scanner
+/// uses to call a seam clicky.
+func joinStep(tail: [Float], trail: Int, head: [Float], lead: Int) -> (ratio: Double, step: Double)? {
+    let look = 882                                            // 20 ms
+    let a = tail.count - trail, b = lead
+    guard a > look, b + look < head.count, a <= tail.count else { return nil }
+
+    let left = Array(tail[(a - look) ..< a]), right = Array(head[b ..< (b + look)])
+    guard let last = left.last, let first = right.first else { return nil }
+
+    var deltas: [Double] = []
+    for side in [left, right] {
+        for i in 1 ..< side.count { deltas.append(abs(Double(side[i] - side[i - 1]))) }
+    }
+    deltas.sort()
+    let p99 = deltas[min(deltas.count - 1, Int(Double(deltas.count) * 0.99))]
+    let step = abs(Double(first - last))
+    return (step / max(p99, 1e-5), step)
+}
+
+func sampleRate(_ path: String) -> Int? {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    p.arguments = ["ffprobe", "-v", "error", "-select_streams", "a:0",
+                   "-show_entries", "stream=sample_rate", "-of", "csv=p=0:nk=1", path]
+    let out = Pipe()
+    p.standardOutput = out
+    p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return nil }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return Int(String(decoding: data, as: UTF8.self)
+        .trimmingCharacters(in: CharacterSet(charactersIn: ", \n\r")))
+}
+
+/// Where the music starts and ends inside a decoded stream, to the sample.
+///
+/// It has to be to the sample. Two tracks that meet at a hard cut only sound joined
+/// if the waveform is continuous across the join, and at full level a third of a
+/// millisecond of slop is already a step of ~0.08 — an audible click. Trimming a
+/// block at a time trades the gap for a tick.
+///
+/// Encoder padding is not digital silence but the encoder's ringing around it, which
+/// stays under about -60 dB, while the music at such a seam comes in at full level
+/// within a sample or two. So the edge is the first sample clear of that ringing.
+/// Erring low only leaves a little padding behind, which is the harmless direction —
+/// erring high would cut into the music.
+func bounds(_ x: [Float], floor: Float = 1.5e-3) -> (lead: Int, trail: Int) {
+    let lead = x.firstIndex { abs($0) > floor } ?? x.count
+    let last = x.lastIndex { abs($0) > floor } ?? -1
+    return (lead, x.count - (last + 1))
+}
+
+// MARK: - What each seam needs
+
+/// One end of one file: the silence to be trimmed there, and what the file's header
+/// says about that end today.
+struct Edge {
+    let samples: [Float]
+    let silence: Int                 // samples of it, at the seam-facing end
+    let tag: TagWriter.MP3Gapless?
+
+    /// What FFmpeg already takes off this end today. Reading the measurement against
+    /// it is what makes a header that is present and lying get corrected rather than
+    /// added to.
+    func alreadyTrimmed(_ head: Bool) -> Int {
+        guard let tag else { return 0 }
+        if head { return tag.delay + opts.decoderDelay }
+        return tag.frames > 0 ? max(0, tag.padding - opts.decoderDelay) : 0
+    }
+}
+
+func edge(_ path: String, tail: Bool) -> Edge? {
+    guard let x = decodeEdge(path, tail: tail), x.count > 2048 else { return nil }
+    let data = (try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)) ?? Data()
+    let (lead, trail) = bounds(x)
+    return Edge(samples: x, silence: tail ? trail : lead, tag: TagWriter.readMP3Gapless(data))
+}
+
+/// What one broken seam asks of the two files that meet at it.
+struct SeamFix {
+    let seam: Seam
+    let padding: Int?       // for the track before the seam
+    let delay: Int?         // for the track after it
+    let trimmed: Int        // samples of silence the two trims take out between them
+    let refused: String?    // why the seam was left alone, if it was
+}
+
+func consider(_ s: Seam, opts: Options) -> SeamFix? {
+    guard let before = edge(s.from, tail: true), let after = edge(s.to, tail: false) else { return nil }
+
+    let padding = before.alreadyTrimmed(false) + before.silence + opts.decoderDelay
+    let delay = after.alreadyTrimmed(true) + after.silence - opts.decoderDelay
+
+    func refuse(_ why: String) -> SeamFix {
+        SeamFix(seam: s, padding: nil, delay: nil, trimmed: 0, refused: why)
+    }
+
+    // Silence too long to be padding is silence somebody meant to be there.
+    guard (0 ... opts.maxPadSamples).contains(padding), (0 ... opts.maxPadSamples).contains(delay) else {
+        return refuse("the silence here is too long to be encoder padding")
+    }
+
+    // First, do no harm. If the two edges do not actually meet once the padding is
+    // gone, closing the seam does not make it seamless — it trades a gap you can hear
+    // for a click you can hear. That happens when the split lost samples rather than
+    // merely padding them, and no header can put those samples back.
+    if let join = joinStep(tail: before.samples, trail: before.silence,
+                           head: after.samples, lead: after.silence),
+       join.ratio >= 8, join.step >= 0.02 {
+        return refuse(String(format: "the edges do not meet — closing it would step %.1f× (%.3f), a click",
+                             join.ratio, join.step))
+    }
+
+    return SeamFix(seam: s, padding: padding, delay: delay,
+                   trimmed: before.silence + after.silence, refused: nil)
+}
+
+/// The header a file ends up with, once every seam it takes part in has had its say.
+struct Plan {
+    let path: String
+    let before: TagWriter.MP3Gapless?
+    let delay: Int
+    let padding: Int
+    let headTrim: Int
+    let tailTrim: Int
+
+    /// Under half a millisecond of residual silence is the encoder's ringing, not a
+    /// gap, and rewriting a file to shave it off buys nothing.
+    var changes: Bool { max(headTrim, tailTrim) >= 16 }
+}
+
+func name(_ p: String) -> String { (p as NSString).lastPathComponent }
+func ms(_ samples: Int) -> String { String(format: "%.0f ms", Double(samples) / 44_100 * 1000) }
+
+@main
+enum MuonFixGapless {
+    static func main() {
+        if let dir = opts.restore { restore(from: dir) }
+
+        let (seams, otherFormats) = readPlan()
+        guard !seams.isEmpty else {
+            print("no MP3 seams to fix (\(otherFormats) gap seams are in other formats)")
+            exit(0)
+        }
+
+        let lock = NSLock()
+        var fixes: [SeamFix] = []
+        let slots = DispatchSemaphore(value: opts.jobs)
+
+        DispatchQueue.concurrentPerform(iterations: seams.count) { i in
+            slots.wait()
+            defer { slots.signal() }
+            guard let f = consider(seams[i], opts: opts) else { return }
+            lock.lock(); fixes.append(f); lock.unlock()
+        }
+
+        // Each end of a file belongs to exactly one seam, so the two verdicts never
+        // fight over the same field: the seam before a track sets its delay, the seam
+        // after it sets its padding.
+        var plans: [String: Plan] = [:]
+        func amend(_ path: String, delay: Int? = nil, padding: Int? = nil, trim: Int) {
+            let data = (try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)) ?? Data()
+            let existing = plans[path]
+            let before = existing?.before ?? TagWriter.readMP3Gapless(data)
+            plans[path] = Plan(
+                path: path, before: before,
+                delay: delay ?? existing?.delay ?? before?.delay ?? 0,
+                padding: padding ?? existing?.padding ?? before?.padding ?? 0,
+                headTrim: delay != nil ? trim : (existing?.headTrim ?? 0),
+                tailTrim: padding != nil ? trim : (existing?.tailTrim ?? 0))
+        }
+
+        for f in fixes where f.refused == nil {
+            guard let padding = f.padding, let delay = f.delay else { continue }
+            amend(f.seam.from, padding: padding, trim: f.trimmed)
+            amend(f.seam.to, delay: delay, trim: f.trimmed)
+        }
+
+        let refused = fixes.filter { $0.refused != nil }
+        let work = plans.values.filter(\.changes).sorted { $0.path < $1.path }
+
+        for p in work {
+            let was = p.before.map { "delay \($0.delay), pad \($0.padding)" } ?? "no Xing header"
+            var trims: [String] = []
+            if p.headTrim >= 16 { trims.append("\(ms(p.headTrim)) off the head") }
+            if p.tailTrim >= 16 { trims.append("\(ms(p.tailTrim)) off the tail") }
+            print("  \(name(p.path))\n      \(was)  →  delay \(p.delay), pad \(p.padding)"
+                  + (trims.isEmpty ? "" : "   [\(trims.joined(separator: ", "))]"))
+        }
+
+        if !refused.isEmpty {
+            print("\nleft alone:")
+            for f in refused {
+                print("  \(f.seam.artist) — \(f.seam.album)  \(name(f.seam.from)) → \(name(f.seam.to))"
+                      + "\n      \(f.refused!)")
+            }
+        }
+
+        print("\n\(work.count) MP3s to rewrite, closing \(fixes.count - refused.count) of "
+              + "\(fixes.count) seams"
+              + (otherFormats == 0 ? "" :
+                 "; \(otherFormats) gap seams are not MP3 and are the player's to fix"))
+
+        guard opts.apply else {
+            print("dry run — nothing written. Pass --apply.")
+            exit(0)
+        }
+        guard !work.isEmpty else { exit(0) }
+        apply(work)
+    }
+
+    static func apply(_ work: [Plan]) {
+        // The whole file is backed up, not just the header: the header frame shifts
+        // everything behind it, so there is no smaller thing to keep.
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "")
+        let backupDir = URL(fileURLWithPath: opts.backupRoot).appendingPathComponent(stamp)
+        var entries: [BackupEntry] = []
+        var written = 0, reverted = 0
+
+        for p in work {
+            let backup = backupDir.appendingPathComponent("files" + p.path)
+            do {
+                try fm.createDirectory(at: backup.deletingLastPathComponent(),
+                                       withIntermediateDirectories: true)
+                try fm.copyItem(at: URL(fileURLWithPath: p.path), to: backup)
+                try TagWriter.writeMP3Gapless(delay: p.delay, padding: p.padding,
+                                              to: URL(fileURLWithPath: p.path))
+            } catch {
+                print("FAILED \(name(p.path)) — \(error)")
+                continue
+            }
+
+            // Decode what was just written. A file that does not come back clean goes
+            // straight back to how it was — the fix is not worth a damaged library.
+            let tolerance = 64                                  // ~1.5 ms
+            let headOK = p.headTrim < 16
+                || (decodeEdge(p.path, tail: false).map { bounds($0).lead <= tolerance } ?? false)
+            let tailOK = p.tailTrim < 16
+                || (decodeEdge(p.path, tail: true).map { bounds($0).trail <= tolerance } ?? false)
+
+            if headOK, tailOK {
+                entries.append(BackupEntry(path: p.path, backup: backup.path,
+                                           delayBefore: p.before?.delay ?? 0,
+                                           paddingBefore: p.before?.padding ?? 0,
+                                           delayAfter: p.delay, paddingAfter: p.padding))
+                written += 1
+            } else {
+                _ = try? fm.replaceItemAt(URL(fileURLWithPath: p.path), withItemAt: backup)
+                reverted += 1
+                print("REVERTED \(name(p.path)) — it did not come back clean after writing")
+            }
+        }
+
+        if !entries.isEmpty {
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try? enc.encode(entries).write(to: backupDir.appendingPathComponent("manifest.json"))
+        }
+
+        print("""
+
+        wrote \(written) file\(written == 1 ? "" : "s")\(reverted > 0 ? ", reverted \(reverted)" : "")
+        backups: \(backupDir.path)
+        roll back with:  muon-fix-gapless --restore \(backupDir.path)
+        """)
+    }
+}

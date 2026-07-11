@@ -1003,3 +1003,213 @@ private enum Ogg {
         return crc
     }
 }
+
+// MARK: - MP3 gapless (Xing/Info header + LAME encoder delay)
+
+extension TagWriter {
+    /// What the encoder added and the decoder has to take away again: `delay` samples
+    /// of silence before the music, `padding` after it. Without them one track cannot
+    /// run into the next — the padding is heard as a gap at the seam.
+    ///
+    /// This is not a tag. It lives in the LAME extension of the Xing/Info header, an
+    /// MPEG frame that sits in front of the audio and that decoders skip rather than
+    /// play, so writing it means rebuilding that frame rather than setting a field.
+    /// FFmpeg reads it only when the encoder string is LAME/Lavf/Lavc, and skips
+    /// `delay + 529` samples — the 529 being the decoder's own delay, which every
+    /// writer of this field is expected to have already subtracted.
+    struct MP3Gapless: Equatable {
+        var delay: Int
+        var padding: Int
+        var frames: Int      // audio frames the header claims, not counting itself
+
+        /// Neither field is wider than 12 bits.
+        var fitsInTag: Bool { (0 ... 4095).contains(delay) && (0 ... 4095).contains(padding) }
+    }
+
+    static func readMP3Gapless(_ file: Data) -> MP3Gapless? { MPEG.readTag(file) }
+
+    /// Rebuild the file's Xing/Info header so it declares `delay` and `padding`.
+    /// Audio frames, ID3 tags and everything else are copied through untouched; only
+    /// the header frame in front of the audio is replaced (or added, when the encoder
+    /// never wrote one).
+    static func writeMP3Gapless(delay: Int, padding: Int, to url: URL) throws {
+        let file = try Data(contentsOf: url, options: .mappedIfSafe)
+        try writeAtomically(MPEG.write(delay: delay, padding: padding, into: file), to: url)
+    }
+}
+
+private enum MPEG {
+    struct Header {
+        let lsf: Bool               // MPEG 2 / 2.5: half the samples, half the side info
+        let mono: Bool
+        let sampleRate: Int
+        let bitrate: Int            // kbps
+        let size: Int
+        let samplesPerFrame: Int
+        let bytes: [UInt8]
+
+        /// Where the Xing/Info magic sits, measured from the end of the 4-byte header.
+        var sideInfoSize: Int { lsf ? (mono ? 9 : 17) : (mono ? 17 : 32) }
+        var tagOffset: Int { 4 + sideInfoSize }
+    }
+
+    static let mpeg1Bitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+    static let mpeg2Bitrates = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+    static let sampleRates = [[11025, 12000, 8000], [], [22050, 24000, 16000], [44100, 48000, 32000]]
+
+    /// The Xing header, its LAME extension included, is 156 bytes at most.
+    static let tagBytes = 156
+
+    static func header(_ d: Data, _ offset: Int, bitrateIndex: Int? = nil) -> Header? {
+        let s = d.startIndex
+        guard offset >= 0, offset + 4 <= d.count else { return nil }
+        let b1 = d[s + offset], b2 = d[s + offset + 1], b3 = d[s + offset + 2], b4 = d[s + offset + 3]
+        guard b1 == 0xFF, b2 & 0xE0 == 0xE0 else { return nil }
+
+        let version = Int((b2 >> 3) & 0x3)                  // 0 = 2.5, 1 = reserved, 2 = 2, 3 = 1
+        guard version != 1, (b2 >> 1) & 0x3 == 1 else { return nil }   // layer III only
+        let brIndex = bitrateIndex ?? Int(b3 >> 4)
+        let srIndex = Int((b3 >> 2) & 0x3)
+        guard brIndex > 0, brIndex < 15, srIndex < 3 else { return nil }
+
+        let mpeg1 = version == 3
+        let bitrate = (mpeg1 ? mpeg1Bitrates : mpeg2Bitrates)[brIndex]
+        let rate = sampleRates[version][srIndex]
+        let padded = bitrateIndex == nil && (b3 >> 1) & 1 == 1     // a rebuilt header is never padded
+        let size = (mpeg1 ? 144 : 72) * bitrate * 1000 / rate + (padded ? 1 : 0)
+        guard size > 4 else { return nil }
+
+        var raw = [b1, b2, b3, b4]
+        if bitrateIndex != nil {
+            raw[2] = UInt8((brIndex << 4)) | (b3 & 0x0F)
+            raw[2] &= ~0x02                                        // clear the padding bit
+        }
+        return Header(lsf: !mpeg1, mono: (b4 >> 6) & 0x3 == 3, sampleRate: rate, bitrate: bitrate,
+                      size: size, samplesPerFrame: mpeg1 ? 1152 : 576, bytes: raw)
+    }
+
+    /// Every MPEG frame in the file, in order.
+    ///
+    /// Frames are not always laid end to end — encoders do leave stray bytes between
+    /// them — so a walk that insists on finding the next header exactly where the last
+    /// frame ended gives up on perfectly good files. When the next frame is not where
+    /// it should be, hunt for it. What stops the walk is running out of frames, which
+    /// is what an ID3v1 or APE trailer at the end of the file looks like.
+    static func frames(_ d: Data, from start: Int) -> [(offset: Int, header: Header)] {
+        var out: [(offset: Int, header: Header)] = []
+        guard var o = resync(d, from: start) else { return [] }
+        while let h = header(d, o) {
+            out.append((o, h))
+            guard let next = resync(d, from: o + h.size, limit: 8192) else { break }
+            o = next
+        }
+        return out
+    }
+
+    /// The next frame at or after `from`. A sync word is only two bytes of ones and
+    /// turns up inside audio data and cover art all the time, so a candidate counts
+    /// only if another frame follows it — or if it is the last thing in the file.
+    private static func resync(_ d: Data, from: Int, limit: Int = .max) -> Int? {
+        var o = max(0, from)
+        let stop = limit == .max ? d.count : min(d.count, from + limit)
+        while o + 4 <= d.count, o <= stop {
+            if let h = header(d, o), header(d, o + h.size) != nil || o + h.size >= d.count - 128 {
+                return o
+            }
+            o += 1
+        }
+        return nil
+    }
+
+    static func isXingFrame(_ d: Data, _ frame: (offset: Int, header: Header)) -> Bool {
+        magic(d, frame.offset + frame.header.tagOffset).map { $0 == "Xing" || $0 == "Info" } ?? false
+    }
+
+    private static func magic(_ d: Data, _ at: Int) -> String? {
+        let s = d.startIndex
+        guard at >= 0, at + 4 <= d.count else { return nil }
+        return String(bytes: d[s + at ..< s + at + 4], encoding: .ascii)
+    }
+
+    private static func be32(_ d: Data, _ at: Int) -> Int {
+        let s = d.startIndex
+        return Int(d[s + at]) << 24 | Int(d[s + at + 1]) << 16 | Int(d[s + at + 2]) << 8 | Int(d[s + at + 3])
+    }
+
+    static func readTag(_ d: Data) -> TagWriter.MP3Gapless? {
+        let start = ID3.tagLength(d) ?? 0
+        guard let first = frames(d, from: start).first, isXingFrame(d, first) else { return nil }
+
+        let tag = first.offset + first.header.tagOffset
+        guard tag + 8 <= d.count else { return nil }
+        let flags = be32(d, tag + 4)
+
+        var p = tag + 8
+        var frameCount = 0
+        if flags & 0x01 != 0 { guard p + 4 <= d.count else { return nil }; frameCount = be32(d, p); p += 4 }
+        if flags & 0x02 != 0 { p += 4 }
+        if flags & 0x04 != 0 { p += 100 }
+        if flags & 0x08 != 0 { p += 4 }
+
+        // FFmpeg reads the delays only when it recognises the encoder string.
+        guard let encoder = magic(d, p), ["LAME", "Lavf", "Lavc"].contains(encoder),
+              p + 24 <= d.count else { return nil }
+        let v = Int(d[d.startIndex + p + 21]) << 16 | Int(d[d.startIndex + p + 22]) << 8
+              | Int(d[d.startIndex + p + 23])
+        return TagWriter.MP3Gapless(delay: v >> 12, padding: v & 0xFFF, frames: frameCount)
+    }
+
+    static func write(delay: Int, padding: Int, into file: Data) throws -> Data {
+        let s = file.startIndex
+        let id3 = ID3.tagLength(file) ?? 0
+        let all = frames(file, from: id3)
+        guard let first = all.first else { throw TagWriter.TagError.malformed("no MPEG frames") }
+
+        // An existing Xing header is replaced, not kept: its frame count and TOC are
+        // about to be wrong anyway.
+        let audio = isXingFrame(file, first) ? Array(all.dropFirst()) : all
+        guard let firstAudio = audio.first else { throw TagWriter.TagError.malformed("no audio frames") }
+        let audioStart = firstAudio.offset
+
+        // The header frame must be big enough to hold the tag — the smallest bitrate
+        // that manages it, which for a 44.1 kHz stereo stream is 64 kbps.
+        let needed = firstAudio.header.tagOffset + tagBytes
+        guard let h = (1 ... 14).lazy.compactMap({ header(file, audioStart, bitrateIndex: $0) })
+            .first(where: { $0.size >= needed })
+        else { throw TagWriter.TagError.malformed("no bitrate fits a Xing header") }
+
+        let byteCount = h.size + (file.count - audioStart)      // header frame → EOF, as FFmpeg counts it
+        let vbr = Set(audio.map(\.header.bitrate)).count > 1
+
+        var frame = [UInt8](repeating: 0, count: h.size)
+        frame.replaceSubrange(0 ..< 4, with: h.bytes)
+
+        var p = h.tagOffset
+        func put(_ bytes: [UInt8]) { frame.replaceSubrange(p ..< p + bytes.count, with: bytes); p += bytes.count }
+        func put32(_ n: Int) { put([UInt8(n >> 24 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n & 0xFF)]) }
+
+        put(Array((vbr ? "Xing" : "Info").utf8))
+        put32(0x07)                                              // frames + bytes + TOC
+        put32(audio.count)
+        put32(byteCount)
+        put((0 ..< 100).map { i in
+            let frameIndex = min(audio.count - 1, i * audio.count / 100)
+            let offset = h.size + (audio[frameIndex].offset - audioStart)
+            return UInt8(min(255, 256 * offset / max(byteCount, 1)))
+        })
+
+        // The LAME extension. Everything but the encoder string and the delays is left
+        // zero: no replay gain, no CRC — FFmpeg reads neither, and a wrong CRC is worse
+        // than an absent one.
+        put(Array("LAME3.100".utf8))                             // 9 bytes; the magic FFmpeg looks for
+        p += 12                                                  // revision, lowpass, gain, flags, bitrate
+        put([UInt8((delay >> 4) & 0xFF),
+             UInt8(((delay & 0x0F) << 4) | ((padding >> 8) & 0x0F)),
+             UInt8(padding & 0xFF)])
+
+        var out = Data(file[s ..< s + id3])
+        out.append(contentsOf: frame)
+        out.append(file[s + audioStart ..< file.endIndex])
+        return out
+    }
+}
