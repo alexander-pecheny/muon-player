@@ -63,7 +63,7 @@ xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer \
 Tests use **Swift Testing** (`@Test`/`#expect`), not XCTest. The XCTest summary
 line prints `Executed 0 tests` — that's expected; the real results are the
 `✔ Test …` / `✔ Test run with N tests in M suites passed` lines (currently
-58 tests in 13 suites).
+62 tests in 14 suites).
 
 ## Build & run the Mac app
 
