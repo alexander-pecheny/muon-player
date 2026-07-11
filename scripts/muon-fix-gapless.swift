@@ -59,6 +59,10 @@ struct Options {
     /// somebody meant to be there, and it is left alone. The 12-bit LAME fields
     /// cannot express more than 4095 samples anyway.
     var maxPadSamples = 4095
+    /// A seam is left alone when closing it would still leave the sound dropping this
+    /// far away in the join — a tick in place of a hiccup is not a repair. Raise it to
+    /// close those seams anyway: the dip is always shorter than the gap it replaces.
+    var dipDb = 12.0
     var jobs = ProcessInfo.processInfo.activeProcessorCount
 }
 
@@ -73,6 +77,7 @@ func parseOptions() -> Options {
         case "--verbose", "-v": o.verbose = true
         case "--restore": o.restore = it.next()
         case "--backup-dir": o.backupRoot = it.next() ?? o.backupRoot
+        case "--dip-db": o.dipDb = Double(it.next() ?? "") ?? o.dipDb
         case "--jobs", "-j": o.jobs = Int(it.next() ?? "") ?? o.jobs
         case "--help", "-h":
             print("""
@@ -82,6 +87,8 @@ func parseOptions() -> Options {
               --apply           write; without it, only report
               --restore DIR     put every file in a backup directory back
               --backup-dir DIR  where backups go (default ~/.muon-gapless-backups)
+              --dip-db N        refuse a seam that would still dip this far (default 12;
+                                raise it to close a gap at the price of a short dip)
               --verbose         show the files that need no change
               --jobs, -j N      parallel workers
             """)
@@ -158,9 +165,11 @@ func readPlan() -> (seams: [Seam], otherFormats: Int) {
 
     func isMP3(_ p: String) -> Bool { p.lowercased().hasSuffix(".mp3") }
 
-    let gaps = all.filter { $0.kind == "gap" }
-    let mine = gaps.filter { isMP3($0.from) && isMP3($0.to) }
-    return (mine, gaps.count - mine.count)
+    // A hole is repaired the same way a gap is — by trimming what the encoder left
+    // behind. It is only a different verdict because it is heard differently.
+    let broken = all.filter { $0.kind == "gap" || $0.kind == "hole" }
+    let mine = broken.filter { isMP3($0.from) && isMP3($0.to) }
+    return (mine, broken.count - mine.count)
 }
 
 // MARK: - Decoding
@@ -210,6 +219,39 @@ func decodeEdge(_ path: String, tail: Bool) -> [Float]? {
         }
     }
     return nil
+}
+
+/// How far the sound would drop away in the join once both edges are trimmed, against
+/// the music either side of it.
+///
+/// Trimming the padding cannot conjure back audio the split threw away. Some rippers
+/// fade a few ms in at the cut, and that fade is in the samples: trim up to it and the
+/// seam still dips, which in loud music is heard as a tick. Closing a gap only to
+/// leave a hole is not a repair, so this is measured before anything is written.
+func joinDip(tail: [Float], trail: Int, head: [Float], lead: Int) -> Double {
+    let block = 44                                            // 1 ms
+    let endFrame = tail.count / channels - trail
+    guard endFrame > 40 * block, lead + 40 * block < head.count / channels else { return 0 }
+
+    func levels(_ x: [Float], from: Int, count: Int) -> [Double] {
+        (0 ..< count).map { i in
+            var sum = 0.0
+            for f in (from + i * block) ..< (from + (i + 1) * block) {
+                for c in 0 ..< channels {
+                    let v = Double(x[f * channels + c])
+                    sum += v * v
+                }
+            }
+            return (sum / Double(block * channels)).squareRoot()
+        }
+    }
+
+    let before = levels(tail, from: endFrame - 40 * block, count: 40)
+    let after = levels(head, from: lead, count: 40)
+    let music = (before + after).sorted()[(before.count + after.count) / 2]
+    let atJoin = (before.suffix(3) + after.prefix(3)).min() ?? 0
+    guard music > 1e-9 else { return 0 }
+    return 20 * log10(music) - 20 * log10(max(atJoin, 1e-9))
 }
 
 /// How hard the waveform steps where the two trimmed edges would meet, measured
@@ -266,15 +308,41 @@ func sampleRate(_ path: String) -> Int? {
 /// within a sample or two. So the edge is the first sample clear of that ringing.
 /// Erring low only leaves a little padding behind, which is the harmless direction —
 /// erring high would cut into the music.
-func bounds(_ x: [Float], floor: Float = 1.5e-3) -> (lead: Int, trail: Int) {
+func bounds(_ x: [Float], floor absolute: Float = 1.5e-3) -> (lead: Int, trail: Int) {
     let frames = x.count / channels
-    func sounding(_ f: Int) -> Bool {
-        (0 ..< channels).contains { abs(x[f * channels + $0]) > floor }
+    func peak(_ f: Int) -> Float {
+        (0 ..< channels).map { abs(x[f * channels + $0]) }.max() ?? 0
     }
-    guard let first = (0 ..< frames).first(where: sounding),
-          let last = (0 ..< frames).reversed().first(where: sounding)
-    else { return (frames, frames) }
-    return (first, frames - (last + 1))
+    func edges(_ floor: Float) -> (Int, Int)? {
+        guard let first = (0 ..< frames).first(where: { peak($0) > floor }),
+              let last = (0 ..< frames).reversed().first(where: { peak($0) > floor })
+        else { return nil }
+        return (first, frames - (last + 1))
+    }
+    guard let (leadAbs, trailAbs) = edges(absolute) else { return (frames, frames) }
+
+    // Encoder padding is not silence. It is the encoder's decay ringing around
+    // silence, and in loud music that ringing still clears -56 dBFS — so trimming to
+    // an absolute floor stops early and leaves a millisecond of near-nothing wedged
+    // between two loud tracks. That hole is not a step, so no click test sees it, and
+    // it is exactly what a "slight click" at a seam turns out to be.
+    //
+    // So the floor is set against the music instead: 30 dB below it. What that can
+    // cost is the first or last few ms of a genuinely soft intro or outro, so the
+    // relative floor is only allowed to reach a little past where the absolute one
+    // stopped — ringing dies out in a millisecond or two, an intro does not.
+    let blockFrames = 44                                     // 1 ms
+    let peaks = stride(from: 0, to: max(frames - blockFrames, 1), by: blockFrames).map { s in
+        (s ..< min(s + blockFrames, frames)).map(peak).max() ?? 0
+    }.sorted()
+    guard !peaks.isEmpty else { return (leadAbs, trailAbs) }
+
+    let music = peaks[Int(Double(peaks.count) * 0.9)]        // the loud part of this window
+    let relative = max(absolute, music * 0.0316)             // -30 dB below it
+    guard let (leadRel, trailRel) = edges(relative) else { return (leadAbs, trailAbs) }
+
+    let reach = 441                                          // at most 10 ms further in
+    return (min(leadRel, leadAbs + reach), min(trailRel, trailAbs + reach))
 }
 
 // MARK: - What each seam needs
@@ -338,6 +406,13 @@ func consider(_ s: Seam, opts: Options) -> SeamFix? {
        join.ratio >= 6, join.step >= 0.02 {
         return refuse(String(format: "the edges do not meet — closing it would step %.1f× (%.3f), a click",
                              join.ratio, join.step))
+    }
+
+    let dip = joinDip(tail: before.samples, trail: before.silence,
+                      head: after.samples, lead: after.silence)
+    if dip >= opts.dipDb {
+        return refuse(String(format: "the split faded the audio — closing it would still dip %.0f dB, a tick",
+                             dip))
     }
 
     return SeamFix(seam: s, padding: padding, delay: delay,
