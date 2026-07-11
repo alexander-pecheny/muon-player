@@ -223,6 +223,10 @@ Of those, three verdicts:
 - **CLICK** — the waveform steps at the splice by far more than the music itself
   steps nearby (`--click-ratio`, default 8× the local 99th-percentile sample delta).
   A mistrimmed lossy encode, or a rip split at a non-zero crossing.
+- **HOLE** — no silence to speak of and no step, yet the sound drops away for a
+  millisecond or two in the join (`--dip-db`, default 12 dB below the surrounding
+  music). In a loud seam that is heard as a click. It is what a ripper's short fade at
+  the split leaves behind, and — being audio, not padding — no header can undo it.
 - **GAP** — both files are cut off mid-note, yet the decoder still puts 10–60 ms of
   silence between them (`--gap-ms`…`--pad-ms`). That is the encoder delay surviving
   into playback: mp3 with no LAME/Xing header ≈ 25 ms, AAC with no iTunSMPB ≈ 48 ms.
@@ -264,12 +268,23 @@ any of this:
   nothing.
 - **FLAC/Opus/Vorbis** gaps are real silence in the audio. No tag takes that back.
 
-Two rules keep it from making a library worse. Silence longer than the 12-bit LAME
+Three rules keep it from making a library worse. Silence longer than the 12-bit LAME
 fields can express (4095 samples ≈ 93 ms) is silence somebody *meant*, and is left
-alone. And a seam is only closed if the two edges actually meet: if trimming the
-padding would leave a step big enough to hear, the seam is refused with a reason,
-because a click is no improvement on a gap — that happens when the split lost samples
-rather than merely padding them, and no header can put them back.
+alone. A seam is only closed if the two edges actually meet: if trimming the padding
+would leave a step big enough to hear, the seam is refused, because a click is no
+improvement on a gap — that happens when the split lost samples rather than merely
+padding them. And a seam is refused if closing it would still leave a **hole**
+(`--dip-db`), which is what a ripper's fade at the split leaves: a tick in place of a
+hiccup is not a repair. Raise `--dip-db` to close those anyway — the dip is always
+shorter than the gap it replaces.
+
+Encoder padding is not silence: it is the encoder's decay ringing *around* silence,
+and in loud music that ringing clears an absolute -56 dBFS floor easily. Trimming to
+an absolute floor therefore stops early and leaves a millisecond of near-nothing
+wedged between two loud tracks — heard as a click, though it is neither a gap nor a
+step. So the trim floor is set 30 dB below the music instead, and may only reach a
+little past where the absolute floor stopped (ringing dies in a millisecond or two; a
+soft intro does not).
 
 The trim is measured to the sample, which it has to be: at full level a third of a
 millisecond of slop is already a step of ~0.08, i.e. an audible tick. Every touched

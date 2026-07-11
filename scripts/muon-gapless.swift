@@ -63,6 +63,10 @@ struct Options {
     /// rest are real seams too, but a pair of ambient tails touching is a quieter
     /// thing than the album's big joins.
     var loudDb = -25.0
+    /// The sound may drop away this far in the join, against the music either side,
+    /// before the seam is heard to tick. A hole is not a gap and not a step, so it is
+    /// its own verdict.
+    var dipDb = 12.0
     /// The step at the splice must be this many times the largest step the music
     /// itself makes nearby before it counts as a click.
     var clickRatio = 8.0
@@ -89,6 +93,7 @@ func parseOptions() -> Options {
         case "--min-edge-db": o.minEdgeDb = Double(it.next() ?? "") ?? o.minEdgeDb
         case "--gap-ms": o.gapMs = Double(it.next() ?? "") ?? o.gapMs
         case "--pad-ms": o.padMs = Double(it.next() ?? "") ?? o.padMs
+        case "--dip-db": o.dipDb = Double(it.next() ?? "") ?? o.dipDb
         case "--click-ratio": o.clickRatio = Double(it.next() ?? "") ?? o.clickRatio
         case "--click-abs": o.clickAbs = Double(it.next() ?? "") ?? o.clickAbs
         case "--window-ms": o.windowMs = Double(it.next() ?? "") ?? o.windowMs
@@ -108,6 +113,7 @@ func parseOptions() -> Options {
               --pad-ms N          silence between hard cuts read as encoder padding (default 60)
               --silence-db N      below this a block is silence (default -60)
               --min-edge-db N     the music at a seam must be this loud (default -50)
+              --dip-db N          drop in the join that is heard as a tick (default 12)
               --click-ratio N     step at the splice vs. the music's own steps (default 8)
               --click-abs N       smallest step worth calling a click, 0..1 (default 0.02)
               --window-ms N       audio decoded from each side of a seam (default 500)
@@ -455,7 +461,46 @@ func splice(_ a: Audio, _ b: Audio) -> (ratio: Double, step: Double)? {
 enum Kind: String {
     case flow                 // seamless, and it sounds seamless
     case click                // seamless, but the splice ticks
+    case hole                 // seamless, but a millisecond of near-nothing sits in the join
     case gap                  // meant to be seamless; encoder padding got in the way
+}
+
+/// How far the sound drops away at the join, against the music either side of it.
+///
+/// A seam can be continuous — no silence to speak of, no step in the waveform — and
+/// still tick, because a millisecond of near-nothing is wedged into it. That is what
+/// is left when a trim stops at an absolute silence floor while the encoder's decay
+/// ringing, which in loud music clears that floor easily, plays on. It is not a gap
+/// and not a step, so neither of those tests sees it; in loud music it is heard as a
+/// click all the same.
+func dip(_ tail: Audio, _ head: Audio) -> Double {
+    guard tail.rate == head.rate, tail.channels == head.channels else { return 0 }
+    let block = max(1, tail.rate / 1000)                     // 1 ms
+
+    func levels(_ a: Audio, from: Int, count: Int) -> [Double] {
+        stride(from: from, to: min(from + count * block, a.frames), by: block).map { start in
+            var sum = 0.0
+            let end = min(start + block, a.frames)
+            for f in start ..< end {
+                for c in 0 ..< a.channels {
+                    let v = Double(a.samples[f * a.channels + c])
+                    sum += v * v
+                }
+            }
+            let n = Double((end - start) * a.channels)
+            return n > 0 ? (sum / n).squareRoot() : 0
+        }
+    }
+
+    // 40 ms of music either side, and the 3 ms on each side of the join itself.
+    let before = levels(tail, from: max(0, tail.frames - 40 * block), count: 40)
+    let after = levels(head, from: 0, count: 40)
+    guard before.count >= 6, after.count >= 6 else { return 0 }
+
+    let music = (before + after).sorted()[(before.count + after.count) / 2]      // median
+    let atJoin = (before.suffix(3) + after.prefix(3)).min() ?? 0
+    guard music > 0 else { return 0 }
+    return dB(music) - dB(atJoin)
 }
 
 struct Finding {
@@ -501,6 +546,13 @@ func judge(_ seam: Seam, tail: Audio, head: Audio) -> Finding? {
             ratio = s.ratio
             step = s.step
             if ratio >= opts.clickRatio, step >= opts.clickAbs { kind = .click }
+        }
+        if kind == .flow {
+            let drop = dip(tail, head)
+            if drop >= opts.dipDb {
+                kind = .hole
+                note = String(format: "the sound drops %.0f dB for a moment in the join", drop)
+            }
         }
     } else if gap <= opts.padMs {
         kind = .gap
@@ -609,7 +661,8 @@ func html(_ findings: [Finding], albums: Int) -> String {
         let a = group[0].album
         let isLoud = group.contains(where: \.isLoud)
         let chips = group.map { f -> String in
-            let cls = f.kind == .click ? "click" : f.kind == .gap ? "gap" : (f.isLoud ? "loud" : "quiet")
+            let cls = f.kind == .click || f.kind == .hole ? "click"
+                : f.kind == .gap ? "gap" : (f.isLoud ? "loud" : "quiet")
             let arrow = f.wrap ? "↻" : "→"
             let no = { (t: Track) in t.number > 0 ? String(t.number) : "•" }
             let detail = f.kind == .gap
@@ -710,7 +763,7 @@ func html(_ findings: [Finding], albums: Int) -> String {
         <span class="chip loud">3→4</span> loud — both sides at \(Int(opts.loudDb)) dB or above, the ones you notice &nbsp;
         <span class="chip quiet">3→4</span> quiet — a real seam, but a gentle one &nbsp;
         <span class="chip gap">3→4</span> broken by encoder padding &nbsp;
-        <span class="chip click">3→4</span> the edges do not meet: a click &nbsp;
+        <span class="chip click">3→4</span> a click: the edges do not meet, or the sound drops away in the join &nbsp;
         <span class="chip quiet">10↻1</span> the album's loop back to track one
       </p>
     </main>
@@ -769,6 +822,7 @@ for key in byAlbum.keys.sorted() {
         switch f.kind {
         case .flow: tag = "flow "
         case .click: tag = "CLICK"
+        case .hole: tag = "HOLE "
         case .gap: tag = "GAP  "
         }
         var line = String(format: "  %@ %@ %@ %@   tail %.0f dB  head %.0f dB",
@@ -784,6 +838,7 @@ for key in byAlbum.keys.sorted() {
 }
 
 let clicks = findings.filter { $0.kind == .click }.count
+let holes = findings.filter { $0.kind == .hole }.count
 let gaps = findings.filter { $0.kind == .gap }.count
 let loudCount = findings.filter(\.isLoud).count
 let loudAlbums = Set(findings.filter(\.isLoud).map { "\($0.album.directory)\u{1}\($0.album.disc)" }).count
@@ -795,6 +850,6 @@ print("""
 \(library.count) albums — \(albumsWithSeams) (\(percent(albumsWithSeams))) have a seam, \
 \(loudAlbums) (\(percent(loudAlbums))) have a loud one
 \(findings.count) seamless transitions: \(loudCount) loud, \(findings.count - loudCount) quiet — \
-\(clicks) with a click, \(gaps) broken by encoder padding
+\(clicks) with a click, \(holes) with a hole, \(gaps) broken by encoder padding
 """)
 if !opts.verbose, clicks + gaps == 0 { print("(nothing broken; --verbose lists the clean seams)") }
