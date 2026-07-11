@@ -1100,22 +1100,30 @@ private enum MPEG {
         guard var o = resync(d, from: start) else { return [] }
         while let h = header(d, o) {
             out.append((o, h))
-            guard let next = resync(d, from: o + h.size, limit: 8192) else { break }
-            o = next
+            let next = o + h.size
+
+            // A frame that sits exactly where the last one ended is taken on trust.
+            // Demanding that *it* be followed by a frame in turn would throw away the
+            // final frame of every file whose trailing ID3v1/APE tag is more than a
+            // few bytes long — and a frame count one short makes FFmpeg place the
+            // end-trim window before the true end, so the padding plays anyway.
+            if header(d, next) != nil { o = next; continue }
+
+            // Only when the stream is not frame-tight is a sync word worth doubting.
+            guard let found = resync(d, from: next, limit: 8192) else { break }
+            o = found
         }
         return out
     }
 
-    /// The next frame at or after `from`. A sync word is only two bytes of ones and
-    /// turns up inside audio data and cover art all the time, so a candidate counts
-    /// only if another frame follows it — or if it is the last thing in the file.
+    /// The next frame at or after `from`. A sync word is two bytes of ones, which turns
+    /// up inside audio data and cover art all the time, so a candidate found by scanning
+    /// counts only if another frame follows it.
     private static func resync(_ d: Data, from: Int, limit: Int = .max) -> Int? {
         var o = max(0, from)
         let stop = limit == .max ? d.count : min(d.count, from + limit)
         while o + 4 <= d.count, o <= stop {
-            if let h = header(d, o), header(d, o + h.size) != nil || o + h.size >= d.count - 128 {
-                return o
-            }
+            if let h = header(d, o), header(d, o + h.size) != nil { return o }
             o += 1
         }
         return nil

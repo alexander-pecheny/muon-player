@@ -194,9 +194,22 @@ decoder the app plays through, so a defect it finds is one you would hear.
 
 ```bash
 swiftc -O scripts/muon-gapless.swift -o /tmp/muon-gapless && /tmp/muon-gapless
+/tmp/muon-gapless --html > ~/Desktop/muon-gapless.html          # the readable report
 swift scripts/muon-gapless.swift --json --filter "Pink Floyd"   # slow: unoptimized
 python3 scripts/test-muon-gapless.py                            # synthetic suite
 ```
+
+Seams are split into **loud** and **quiet** by the level of their *quieter* side
+(`--loud-db`, default −25). Most seams are quiet — two hushed outros touching — and a
+song crashing straight into the next one is a different thing worth picking out.
+
+> Anything that shells out per file must open its `Process` inside an
+> `autoreleasepool` and close both ends of the `Pipe` by hand. Foundation leaves the
+> parent's copy of the pipe to the pool, so a tight concurrent loop of spawns runs the
+> process out of descriptors and `run()` starts throwing EBADF. An early version of
+> this scanner swallowed those failures and silently skipped two thirds of the library
+> while reporting a clean bill of health — which is why a failed decode is now counted
+> and shouted about instead.
 
 Compile it — in `swift`'s interpreter the per-sample loops are ~10× slower. Work is
 fanned out one seam per core (a seam's two decodes are shared with no other seam);
