@@ -8,17 +8,28 @@ struct MacSearchResultsView: View {
 
     @Environment(LibraryStore.self) private var library
     @State private var results = SearchResults()
+    @State private var searched = ""
 
     var body: some View {
         Group {
             if results.isEmpty {
-                ContentUnavailableView.search(text: query)
+                ContentUnavailableView.search(text: searched)
             } else {
                 resultsList
             }
         }
         .navigationTitle("Search")
-        .task(id: query) { results = await library.searchAll(query) }
+        // Typing must not wait on the library. The pause lets a run of keystrokes
+        // land before any query is issued — the intermediate prefixes ("l", "lo")
+        // are the expensive ones and nobody wants to see them.
+        .task(id: query) {
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            let found = await library.searchAll(query)
+            guard !Task.isCancelled else { return }
+            results = found
+            searched = query
+        }
     }
 
     private var resultsList: some View {

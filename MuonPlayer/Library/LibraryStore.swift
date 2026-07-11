@@ -85,8 +85,31 @@ final class LibraryStore {
         await database.normalizeContainerPaths(currentDocuments: LibraryRoot.documents.path)
         #endif
         albums = await database.albums()
+        reindexAlbums()
         trackCount = await database.trackCount()
         version &+= 1
+    }
+
+    /// Lookup tables derived from `albums`, rebuilt whenever it is reloaded.
+    ///
+    /// `album(for:)` runs in the body of every track row and the search filter runs
+    /// on every keystroke; both scanned the whole album list, which a 14k-track
+    /// library feels. The folded keys also keep the filter off ICU's collation —
+    /// `localizedCaseInsensitiveContains` is an order of magnitude dearer than
+    /// `contains` on a pre-folded string.
+    private var albumsByIdentity: [String: Album] = [:]
+    private var albumsByArtistTitle: [String: Album] = [:]
+    private var searchIndex: [AlbumSearchEntry] = []
+
+    private func reindexAlbums() {
+        albumsByIdentity = Dictionary(albums.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        albumsByArtistTitle = Dictionary(albums.map { (Self.artistTitleKey($0.artist, $0.title), $0) },
+                                         uniquingKeysWith: { a, _ in a })
+        searchIndex = albums.map(AlbumSearchEntry.init)
+    }
+
+    private static func artistTitleKey(_ artist: String, _ title: String) -> String {
+        "\(artist)\u{1}\(title)"
     }
 
     /// Incrementally scan the library folder: read metadata for new/changed
@@ -236,8 +259,9 @@ final class LibraryStore {
     /// the release it sits in, so fall back to artist + title.
     func album(for track: Track) -> Album? {
         let artist = track.effectiveAlbumArtist, title = track.displayAlbum
-        return albums.first { $0.artist == artist && $0.title == title && $0.year == track.year }
-            ?? albums.first { $0.artist == artist && $0.title == title }
+        let identity = "\(artist)\u{1}\(title)\u{1}\(track.year.map(String.init) ?? "")"
+        return albumsByIdentity[identity]
+            ?? albumsByArtistTitle[Self.artistTitleKey(artist, title)]
     }
 
     /// The album that now holds the file at `path`. This is how the album screen
@@ -268,20 +292,14 @@ final class LibraryStore {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return SearchResults() }
 
-        let songs = await database.search(q)
+        let index = searchIndex
+        async let songs = database.search(q)
+        async let grouped = Task.detached(priority: .userInitiated) {
+            AlbumSearchEntry.match(q, in: index)
+        }.value
 
-        let artistNames = Set(albums.map(\.artist)).filter { $0.localizedCaseInsensitiveContains(q) }
-        let artists = artistNames
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            .map { name in
-                ArtistResult(name: name,
-                             artworkPath: albums.first { $0.artist == name && $0.artworkPath != nil }?.artworkPath)
-            }
-
-        let matchedAlbums = albums
-            .filter { $0.title.localizedCaseInsensitiveContains(q) || $0.artist.localizedCaseInsensitiveContains(q) }
-
-        return SearchResults(artists: artists, albums: matchedAlbums, songs: songs)
+        let (artists, matchedAlbums) = await grouped
+        return SearchResults(artists: artists, albums: matchedAlbums, songs: await songs)
     }
 
     /// All tracks under an artist's top-level folder, ordered by album release year
