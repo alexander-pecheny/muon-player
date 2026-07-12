@@ -5,6 +5,8 @@ struct MacSettingsView: View {
         TabView {
             LibrarySettings()
                 .tabItem { Label("Library", systemImage: "music.note.house") }
+            GaplessSettings()
+                .tabItem { Label("Gapless", systemImage: "arrow.left.and.right") }
             ScrobbleSettings()
                 .tabItem { Label("Last.fm", systemImage: "waveform") }
             MacAboutView()
@@ -82,6 +84,43 @@ private struct LibrarySettings: View {
 
     private func reindex() {
         Task { await library.setRoots(folders.roots) }
+    }
+}
+
+/// What to do about the albums whose seams are broken by stranded encoder silence.
+private struct GaplessSettings: View {
+    @AppStorage(GaplessFixMode.key) private var mode = GaplessFixMode.playbackOnly.rawValue
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Broken seams").font(.headline)
+
+            Picker("", selection: $mode) {
+                ForEach(GaplessFixMode.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+
+            Text("""
+            Some albums are ripped so that silence is stranded between two tracks meant to run \
+            together. Muon measures it after each library scan and skips it as it plays — in any \
+            format, and without touching a file.
+
+            **Also repair the files** additionally writes the fix into the MP3s, so other players \
+            get it too. Originals are backed up first. Only MP3 can carry a fix this way: an m4a \
+            already knows the truth, and a gap in a FLAC is real silence that no tag takes back — \
+            which is why the rest are only ever fixed as they play.
+
+            Every seam judged and every file touched is logged to *Application Support/gapless.log*.
+            """)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
     }
 }
 
