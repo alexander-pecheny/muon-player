@@ -58,10 +58,29 @@ final class FFmpegDecoder {
     private var skipUntilInputSample: Int64 = 0  // absolute input sample output should start at
     private var inputSampleCursor: Int64 = 0     // absolute input sample of the next decoded frame
 
+    /// Silence measured at the ends of a file that declares none — see `GaplessTrim`.
+    private let measured: GaplessTrim?
+    /// Where the music starts: the priming FFmpeg leaves behind, plus whatever the
+    /// measurement found on top of it.
+    private var contentOriginInputSample: Int64 = 0
+    /// Output frames withheld at the tail. The measured padding cannot be turned into a
+    /// `targetOutputFrames` cap, because a file that needs measuring is a file whose
+    /// declared duration is a guess (a Xing-less VBR mp3 has only a bitrate estimate).
+    /// So the end is found by arriving at it: the last `holdOutputFrames` are buffered
+    /// and dropped at EOF rather than emitted.
+    private var holdOutputFrames: Int64 = 0
+    private var held: [AVAudioPCMBuffer] = []
+    private var heldFrames: Int64 = 0
+    private var decoderDrained = false
+
     enum DecodeError: Error { case open(String), noAudioStream, codec(String), resampler }
 
-    init(url: URL) throws {
+    /// `trim` defaults to whatever was measured for this file, so that every decode in
+    /// the app — playback, waveform — hears the same audio. Pass one explicitly to
+    /// override, or `.init(head: 0, tail: 0)` to decode the file untrimmed.
+    init(url: URL, trim: GaplessTrim? = nil) throws {
         self.url = url
+        self.measured = trim ?? GaplessTrims.shared.trim(for: url.path)
         try openInput()
     }
 
@@ -128,7 +147,17 @@ final class FFmpegDecoder {
             // guess from the bitrate, and capping to that would cut real music.
             targetOutputFrames = rescaleToCanonical(streamSamples)
         }
-        skipUntilInputSample = primingInputSamples
+        // A measured trim sits on top of whatever the file already declares: it is the
+        // silence still left once FFmpeg and any tag have had their say.
+        if let m = measured, !m.isEmpty {
+            contentOriginInputSample = primingInputSamples + Int64(m.head)
+            holdOutputFrames = rescaleToCanonical(Int64(m.tail))
+            targetOutputFrames = targetOutputFrames.map { $0 - rescaleToCanonical(Int64(m.head)) }
+            duration = max(0, duration - Double(m.head + m.tail) / Double(inSampleRate))
+        } else {
+            contentOriginInputSample = primingInputSamples
+        }
+        skipUntilInputSample = contentOriginInputSample
 
         try setupResampler(cctx)
 
@@ -162,7 +191,7 @@ final class FFmpegDecoder {
     func seek(to time: TimeInterval) {
         guard let fmtCtx, let codecCtx else { return }
         let contentSample = Int64((time * Double(inSampleRate)).rounded())
-        skipUntilInputSample = primingInputSamples + contentSample
+        skipUntilInputSample = contentOriginInputSample + contentSample
         let ts = av_rescale_q(skipUntilInputSample, AVRational(num: 1, den: inSampleRate), timeBase)
         av_seek_frame(fmtCtx, streamIndex, ts, AVSEEK_FLAG_BACKWARD)
         avcodec_flush_buffers(codecCtx)
@@ -171,6 +200,9 @@ final class FFmpegDecoder {
         flushed = false
         inputSampleCursor = 0
         emittedOutputFrames = rescaleToCanonical(contentSample)
+        held.removeAll()
+        heldFrames = 0
+        decoderDrained = false
     }
 
     private var reachedTarget: Bool {
@@ -195,11 +227,18 @@ final class FFmpegDecoder {
 
     /// Number of leading samples of `frame` that fall before `skipUntilInputSample`,
     /// advancing the absolute input cursor past it.
+    ///
+    /// A *negative* pts is FFmpeg saying it has already dropped this frame's priming
+    /// itself — Opus's 312-sample pre-skip, AAC's encoder delay — but could not rewrite
+    /// the timestamp to match ("Could not update timestamps for skipped samples"). The
+    /// samples it hands over start at content sample 0, so the cursor is clamped there.
+    /// Taking the pts literally would skip the priming a second time and eat the first
+    /// 6.5 ms of every Opus track, which is heard as a chopped-off attack at a seam.
     private func consumeSkip(_ frame: UnsafeMutablePointer<AVFrame>) -> Int32 {
         let count = Int64(frame.pointee.nb_samples)
         if frame.pointee.pts != Int64.min { // AV_NOPTS_VALUE
-            inputSampleCursor = av_rescale_q(frame.pointee.pts, timeBase,
-                                             AVRational(num: 1, den: inSampleRate))
+            inputSampleCursor = max(0, av_rescale_q(frame.pointee.pts, timeBase,
+                                                    AVRational(num: 1, den: inSampleRate)))
         }
         let drop = min(count, max(0, skipUntilInputSample - inputSampleCursor))
         inputSampleCursor += count
@@ -208,7 +247,38 @@ final class FFmpegDecoder {
 
     /// Returns the next chunk of canonical PCM, or nil at end of stream.
     /// Buffers are ~one decoded frame each (resampled).
+    ///
+    /// With a measured tail trim in force this runs `holdOutputFrames` behind the
+    /// decoder, so the padding at the very end is never handed out.
     func nextBuffer() -> AVAudioPCMBuffer? {
+        guard holdOutputFrames > 0 else { return decodeNext() }
+
+        while !decoderDrained,
+              heldFrames - holdOutputFrames < Int64(held.first?.frameLength ?? 1) {
+            guard let buffer = decodeNext() else { decoderDrained = true; break }
+            held.append(buffer)
+            heldFrames += Int64(buffer.frameLength)
+        }
+
+        let releasable = heldFrames - holdOutputFrames
+        guard releasable > 0, let front = held.first else {
+            held.removeAll(); heldFrames = 0
+            return nil
+        }
+        if releasable >= Int64(front.frameLength) {
+            held.removeFirst()
+            heldFrames -= Int64(front.frameLength)
+            return front
+        }
+        // Only reachable at EOF: the front buffer straddles the trim, so part of it is
+        // music and the rest is padding.
+        front.frameLength = AVAudioFrameCount(releasable)
+        held.removeAll()
+        heldFrames = 0
+        return front
+    }
+
+    private func decodeNext() -> AVAudioPCMBuffer? {
         guard let codecCtx, let packet, let frame, let swr else { return nil }
 
         while true {

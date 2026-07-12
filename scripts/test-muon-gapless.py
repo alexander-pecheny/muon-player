@@ -21,7 +21,7 @@ import tempfile
 
 RATE = 44100
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT = os.path.join(ROOT, "scripts", "muon-gapless.swift")
+
 
 
 def wav(path, samples):
@@ -110,9 +110,25 @@ def run(binary, db):
     return found
 
 
+def build_binary():
+    """The scanner is an Xcode target now — it links the app's FFmpeg to decode
+    in-process, so there is nothing swiftc alone can compile."""
+    subprocess.run(
+        ["xcodebuild", "-project", os.path.join(ROOT, "MuonPlayer.xcodeproj"),
+         "-scheme", "MuonGapless", "-configuration", "Release",
+         "-destination", "platform=macOS,arch=arm64", "build"],
+        check=True, capture_output=True, text=True, cwd=ROOT)
+    out = subprocess.run(
+        ["xcodebuild", "-project", os.path.join(ROOT, "MuonPlayer.xcodeproj"),
+         "-scheme", "MuonGapless", "-configuration", "Release",
+         "-showBuildSettings", "-json"],
+        check=True, capture_output=True, text=True, cwd=ROOT)
+    settings = json.loads(out.stdout)[0]["buildSettings"]
+    return os.path.join(settings["BUILT_PRODUCTS_DIR"], settings["EXECUTABLE_NAME"])
+
+
 def main():
-    binary = os.path.join(tempfile.mkdtemp(), "muon-gapless")
-    subprocess.run(["swiftc", "-O", SCRIPT, "-o", binary], check=True)
+    binary = build_binary()
 
     tmp = tempfile.mkdtemp()
     failures = []

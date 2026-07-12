@@ -114,6 +114,43 @@ targets:
         - -Xcc
         - -I$(SRCROOT)/Vendor/FFmpeg/include
 
+  # The seam scan is app code (Audio/{EdgeDecoder,GaplessScan}); this is the front end
+  # that runs it over the whole library from a terminal. It links the same FFmpeg the
+  # player does, so a defect it reports is one the player would play.
+  MuonGapless:
+    type: tool
+    platform: macOS
+    sources:
+      - path: MuonGapless
+      - path: MuonPlayer/Audio/EdgeDecoder.swift
+      - path: MuonPlayer/Audio/GaplessScan.swift
+      - path: MuonPlayer/Audio/GaplessInfo.swift
+      - path: MuonPlayer/Audio/GaplessTrims.swift
+      - path: MuonPlayer/Audio/FFmpeg.swift
+    dependencies:
+      - framework: Vendor/FFmpeg/libavcodec.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libavformat.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libavutil.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libswresample.xcframework
+        embed: false
+      - sdk: libz.tbd
+      - sdk: libbz2.tbd
+      - sdk: libiconv.tbd
+    settings:
+      PRODUCT_NAME: muon-gapless
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      HEADER_SEARCH_PATHS:
+        - $(SRCROOT)/Vendor/FFmpeg/include
+      OTHER_SWIFT_FLAGS:
+        - -Xcc
+        - -fmodule-map-file=$(SRCROOT)/Vendor/FFmpeg/include/module.modulemap
+        - -Xcc
+        - -I$(SRCROOT)/Vendor/FFmpeg/include
+
   MuonPlayerTests:
     type: bundle.unit-test
     platform: iOS
