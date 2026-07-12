@@ -20,6 +20,9 @@ import SQLite3
 struct Options {
     var db: String = NSHomeDirectory()
         + "/Library/Containers/me.pecheny.muonplayer/Data/Library/Application Support/muon-library.sqlite"
+    /// Scan a folder straight off the disk instead of the library — for a folder the app
+    /// has never indexed, which is what a backup or a fresh rip is.
+    var folder: String?
     var json = false
     var html = false
     var verbose = false
@@ -27,6 +30,10 @@ struct Options {
     var filter: String?
     var t = SeamThresholds()
     var jobs = ProcessInfo.processInfo.activeProcessorCount
+    /// Write a before/after pair of clips for every seam the repair would close.
+    var demo: String?
+    /// How much music either side of the seam a clip carries.
+    var demoMs = 2500.0
 }
 
 func parseOptions() -> Options {
@@ -38,6 +45,7 @@ func parseOptions() -> Options {
         case "--html": o.html = true
         case "--verbose", "-v": o.verbose = true
         case "--db": o.db = it.next() ?? o.db
+        case "--folder": o.folder = it.next()
         case "--filter": o.filter = it.next()
         case "--loud-db": o.t.loudDb = Double(it.next() ?? "") ?? o.t.loudDb
         case "--silence-db": o.t.silenceDb = Double(it.next() ?? "") ?? o.t.silenceDb
@@ -49,6 +57,8 @@ func parseOptions() -> Options {
         case "--click-abs": o.t.clickAbs = Double(it.next() ?? "") ?? o.t.clickAbs
         case "--window-ms": o.t.windowMs = Double(it.next() ?? "") ?? o.t.windowMs
         case "--jobs", "-j": o.jobs = Int(it.next() ?? "") ?? o.jobs
+        case "--demo": o.demo = it.next()
+        case "--demo-ms": o.demoMs = Double(it.next() ?? "") ?? o.demoMs
         case "--help", "-h":
             print("""
             muon-gapless — find seamless album transitions, and the broken ones.
@@ -60,6 +70,7 @@ func parseOptions() -> Options {
                                   (default -25)
               --filter TEXT       only tracks whose path contains TEXT
               --db PATH           library database
+              --folder PATH       read this folder off the disk instead of the library
               --gap-ms N          silence at a seam still counted as flowing (default 10)
               --pad-ms N          silence between hard cuts read as encoder padding (default 60)
               --silence-db N      below this a block is silence (default -60)
@@ -69,6 +80,10 @@ func parseOptions() -> Options {
               --click-abs N       smallest step worth calling a click, 0..1 (default 0.02)
               --window-ms N       audio decoded from each side of a seam (default 500)
               --jobs, -j N        parallel album workers
+              --demo DIR          for every seam the repair would close, write the two
+                                  clips that let you hear it: the seam as it plays now,
+                                  and the seam once the silence is skipped
+              --demo-ms N         music either side of the seam in a clip (default 2500)
             """)
             exit(0)
         default:
@@ -83,7 +98,7 @@ let opts = parseOptions()
 
 // MARK: - Library
 
-struct Track {
+struct SeamTrack {
     let path: String
     let title: String
     let artist: String
@@ -93,7 +108,7 @@ struct Track {
     let number: Int
 
     var directory: String { (path as NSString).deletingLastPathComponent }
-    var isLossy: Bool { !Track.lossless.contains(codec) }
+    var isLossy: Bool { !SeamTrack.lossless.contains(codec) }
 
     static let lossless: Set<String> = [
         "flac", "alac", "wavpack", "ape", "tta",
@@ -101,7 +116,7 @@ struct Track {
     ]
 }
 
-func readTracks() -> [Track] {
+func readTracks() -> [SeamTrack] {
     var handle: OpaquePointer?
     guard sqlite3_open_v2(opts.db, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
         FileHandle.standardError.write("cannot open database at \(opts.db)\n".data(using: .utf8)!)
@@ -128,15 +143,43 @@ func readTracks() -> [Track] {
     }
     defer { sqlite3_finalize(stmt) }
 
-    var out: [Track] = []
+    var out: [SeamTrack] = []
     while sqlite3_step(stmt) == SQLITE_ROW {
         func text(_ i: Int32) -> String { sqlite3_column_text(stmt, i).map { String(cString: $0) } ?? "" }
-        out.append(Track(path: text(0), title: text(1), artist: text(2), album: text(3),
+        out.append(SeamTrack(path: text(0), title: text(1), artist: text(2), album: text(3),
                          codec: text(4),
                          disc: Int(sqlite3_column_int64(stmt, 5)),
                          number: Int(sqlite3_column_int64(stmt, 6))))
     }
     return out
+}
+
+/// Read a folder off the disk, with the app's own scanner and tag reader — so a folder
+/// the library has never seen is grouped into albums exactly as the library would.
+func readFolder(_ path: String) -> [SeamTrack] {
+    let files = FileScanner(roots: [URL(fileURLWithPath: path)]).findAudioFiles()
+    var out = [SeamTrack?](repeating: nil, count: files.count)
+
+    out.withUnsafeMutableBufferPointer { buffer in
+        let slots = DispatchSemaphore(value: opts.jobs)
+        DispatchQueue.concurrentPerform(iterations: files.count) { i in
+            slots.wait()
+            defer { slots.signal() }
+
+            let url = files[i]
+            let m = FFmpegMetadata.read(url: url, includeArtwork: false)
+            guard let duration = m.duration, duration > 0 else { return }
+            buffer[i] = SeamTrack(
+                path: url.path,
+                title: m.title ?? url.deletingPathExtension().lastPathComponent,
+                artist: m.albumArtist ?? m.artist ?? "",
+                album: m.album ?? "",
+                codec: m.codec ?? "",
+                disc: m.discNo ?? 1,
+                number: m.trackNo ?? 0)
+        }
+    }
+    return out.compactMap { $0 }
 }
 
 /// A run of files that play one after another: one directory, one album tag, one disc.
@@ -146,11 +189,11 @@ struct Album {
     let artist: String
     let album: String
     let disc: Int
-    let tracks: [Track]
+    let tracks: [SeamTrack]
 }
 
-func albums(from tracks: [Track]) -> [Album] {
-    var groups: [String: [Track]] = [:]
+func albums(from tracks: [SeamTrack]) -> [Album] {
+    var groups: [String: [SeamTrack]] = [:]
     for t in tracks {
         guard FileManager.default.fileExists(atPath: t.path) else { continue }
         groups["\(t.directory)\u{1}\(t.album)\u{1}\(t.disc)", default: []].append(t)
@@ -168,7 +211,7 @@ func albums(from tracks: [Track]) -> [Album] {
 
 /// Two tracks play back to back when they sit next to each other in the album and their
 /// numbers agree with that (a folder missing track 4 has no 3→5 seam).
-func isAdjacent(_ a: Track, _ b: Track) -> Bool {
+func isAdjacent(_ a: SeamTrack, _ b: SeamTrack) -> Bool {
     if a.number > 0, b.number > 0 { return b.number == a.number + 1 }
     return true
 }
@@ -204,8 +247,8 @@ let failures = Failures()
 
 struct Finding {
     let album: Album
-    let from: Track
-    let to: Track
+    let from: SeamTrack
+    let to: SeamTrack
     let wrap: Bool
     let verdict: SeamVerdict
 
@@ -213,7 +256,7 @@ struct Finding {
     var isLoud: Bool { verdict.isLoud(opts.t) }
 }
 
-let all = readTracks().filter { t in
+let all = (opts.folder.map(readFolder) ?? readTracks()).filter { t in
     guard let f = opts.filter else { return true }
     return t.path.range(of: f, options: .caseInsensitive) != nil
 }
@@ -285,9 +328,143 @@ if failures.count > 0 {
     """.data(using: .utf8)!)
 }
 
+// MARK: - Demo clips
+
+/// A seam you can hear, twice: as it plays today, and as it plays once the stranded
+/// silence is skipped. Nothing is written to the music — the repair is applied to the
+/// decoded samples, which is exactly what the player does at playback.
+///
+/// The pair is deliberately the *same* audio, cut the same way, differing only by the
+/// samples the trim takes out. Anything else and the demo would be arguing for itself.
+enum Demo {
+    /// 16-bit PCM. The clips are for a web page, where a float WAV is a needless doubling.
+    static func wav(_ a: EdgeAudio, to url: URL) throws {
+        var body = Data()
+        body.reserveCapacity(a.samples.count * 2)
+        for s in a.samples {
+            let v = Int16(max(-32768, min(32767, (s * 32767).rounded())))
+            withUnsafeBytes(of: v.littleEndian) { body.append(contentsOf: $0) }
+        }
+
+        var out = Data()
+        func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
+        func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
+
+        let channels = UInt16(a.channels), rate = UInt32(a.rate)
+        out.append(contentsOf: Array("RIFF".utf8)); u32(UInt32(36 + body.count))
+        out.append(contentsOf: Array("WAVEfmt ".utf8)); u32(16)
+        u16(1); u16(channels); u32(rate)
+        u32(rate * UInt32(channels) * 2); u16(channels * 2); u16(16)
+        out.append(contentsOf: Array("data".utf8)); u32(UInt32(body.count))
+        out.append(body)
+        try out.write(to: url)
+    }
+
+    static func join(_ a: EdgeAudio, _ b: EdgeAudio) -> EdgeAudio {
+        EdgeAudio(rate: a.rate, channels: a.channels, samples: a.samples + b.samples)
+    }
+
+    static func dropTail(_ a: EdgeAudio, _ n: Int) -> EdgeAudio {
+        EdgeAudio(rate: a.rate, channels: a.channels,
+                  samples: Array(a.samples.prefix(max(0, a.frames - n) * a.channels)))
+    }
+
+    static func dropHead(_ a: EdgeAudio, _ n: Int) -> EdgeAudio {
+        EdgeAudio(rate: a.rate, channels: a.channels,
+                  samples: Array(a.samples.dropFirst(min(n, a.frames) * a.channels)))
+    }
+
+    /// The last `ms` of a window / the first `ms` of one — so the measurement is taken on
+    /// exactly the 500 ms the scan uses, while the clip keeps the seconds around it.
+    static func lastMs(_ a: EdgeAudio, _ ms: Double) -> EdgeAudio {
+        let n = min(a.frames, Int(ms / 1000 * Double(a.rate)))
+        return EdgeAudio(rate: a.rate, channels: a.channels,
+                         samples: Array(a.samples.suffix(n * a.channels)))
+    }
+
+    static func firstMs(_ a: EdgeAudio, _ ms: Double) -> EdgeAudio {
+        let n = min(a.frames, Int(ms / 1000 * Double(a.rate)))
+        return EdgeAudio(rate: a.rate, channels: a.channels,
+                         samples: Array(a.samples.prefix(n * a.channels)))
+    }
+
+    static func slug(_ s: String, _ limit: Int = 40) -> String {
+        let ok = s.lowercased().map { c -> Character in
+            c.isLetter || c.isNumber ? c : "-"
+        }
+        var out = String(ok)
+        while out.contains("--") { out = out.replacingOccurrences(of: "--", with: "-") }
+        out = out.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return String(out.prefix(limit)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+}
+
+if let dir = opts.demo {
+    let root = URL(fileURLWithPath: dir)
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let gaps = findings.filter { $0.kind == .gap }
+    var manifest: [[String: Any]] = []
+    var written = 0
+
+    for f in gaps {
+        // The long windows carry the seconds a listener needs; the scan's own 500 ms
+        // windows are sliced back out of them, so the measurement is the same one the
+        // player would make.
+        guard let dA = try? EdgeDecoder(path: f.from.path),
+              let dB = try? EdgeDecoder(path: f.to.path),
+              let longTail = dA.tail(ms: opts.demoMs), let longHead = dB.head(ms: opts.demoMs),
+              longTail.rate == longHead.rate, longTail.channels == longHead.channels
+        else { continue }
+
+        let tail = Demo.lastMs(longTail, opts.t.windowMs)
+        let head = Demo.firstMs(longHead, opts.t.windowMs)
+
+        guard case .trim(let tailTrim, let headTrim) = SeamScan.repair(tail: tail, head: head, opts.t),
+              tailTrim + headTrim > 0
+        else { continue }
+
+        let name = "\(Demo.slug(f.album.artist))--\(Demo.slug(f.album.album))"
+            + String(format: "--%02d-%02d", f.from.number, f.to.number)
+
+        let before = Demo.join(longTail, longHead)
+        let after = Demo.join(Demo.dropTail(longTail, tailTrim), Demo.dropHead(longHead, headTrim))
+
+        do {
+            try Demo.wav(before, to: root.appendingPathComponent("\(name)--before.wav"))
+            try Demo.wav(after, to: root.appendingPathComponent("\(name)--after.wav"))
+        } catch {
+            FileHandle.standardError.write("demo write failed for \(name): \(error)\n".data(using: .utf8)!)
+            continue
+        }
+        written += 1
+
+        let rate = Double(longTail.rate)
+        manifest.append([
+            "id": name,
+            "artist": f.album.artist, "album": f.album.album,
+            "fromTitle": f.from.title, "toTitle": f.to.title,
+            "fromNo": f.from.number, "toNo": f.to.number,
+            "codec": f.from.codec,
+            "silenceMs": f.verdict.gapMs,
+            "levelDb": f.verdict.levelDb, "loud": f.isLoud,
+            "trimmedTailSamples": tailTrim, "trimmedHeadSamples": headTrim,
+            "trimmedMs": Double(tailTrim + headTrim) / rate * 1000,
+            "sampleRate": longTail.rate,
+            "before": "\(name)--before.wav", "after": "\(name)--after.wav",
+        ])
+    }
+
+    let data = try! JSONSerialization.data(withJSONObject: manifest,
+                                           options: [.prettyPrinted, .sortedKeys])
+    try? data.write(to: root.appendingPathComponent("manifest.json"))
+    FileHandle.standardError.write(
+        "\(written) seam(s) rendered to \(dir) (of \(gaps.count) gap seams)\n".data(using: .utf8)!)
+}
+
 // MARK: - Report
 
-func label(_ t: Track) -> String {
+func label(_ t: SeamTrack) -> String {
     t.number > 0 ? String(format: "%02d", t.number) : (t.path as NSString).lastPathComponent
 }
 
@@ -325,7 +502,7 @@ func html(_ findings: [Finding], albums: Int) -> String {
             let cls = f.kind == .click || f.kind == .hole ? "click"
                 : f.kind == .gap ? "gap" : (f.isLoud ? "loud" : "quiet")
             let arrow = f.wrap ? "↻" : "→"
-            let no = { (t: Track) in t.number > 0 ? String(t.number) : "•" }
+            let no = { (t: SeamTrack) in t.number > 0 ? String(t.number) : "•" }
             let detail = f.kind == .gap
                 ? String(format: "%.0f ms of silence", f.verdict.gapMs)
                 : String(format: "step %.1f×", f.verdict.ratio)
