@@ -6,6 +6,7 @@ struct SettingsView: View {
 
     @State private var username = ""
     @State private var password = ""
+    @AppStorage(GaplessFixMode.key) private var gaplessFixMode = GaplessFixMode.playbackOnly.rawValue
 
     var body: some View {
         Form {
@@ -65,6 +66,24 @@ struct SettingsView: View {
                 Text("Library")
             } footer: {
                 Text("Add music via the Files app under **On My iPhone → MuonPlayer**.")
+            }
+
+            Section {
+                Picker("Broken Seams", selection: $gaplessFixMode) {
+                    ForEach(GaplessFixMode.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+                }
+            } header: {
+                Text("Gapless")
+            } footer: {
+                Text("""
+                Some albums are ripped so that silence is stranded between two tracks meant to \
+                run together. Muon measures it after each scan and skips it as it plays — in any \
+                format, and without touching a file.
+
+                **Also repair the files** additionally writes the fix into the MP3s, so other \
+                players get it too. Originals are backed up first; only MP3 can carry a fix this \
+                way, so the rest stay playback-only.
+                """)
             }
 
             Section("Appearance") {

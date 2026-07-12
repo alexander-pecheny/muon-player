@@ -124,6 +124,13 @@ actor Database {
         addColumn("tracks", "ov_album_artist", "TEXT")
         addColumn("tracks", "ov_composer", "TEXT")
         addColumn("tracks", "ov_track_no", "INTEGER")
+        // Encoder delay/padding measured at an album seam, for files that declare none
+        // (see GaplessTrim). `gapless_mtime` is the file's mtime when the seam scan last
+        // looked at it — that, not the columns above, is what says "already checked":
+        // most tracks need no trim, and a NULL trim is a finding too.
+        addColumn("tracks", "gapless_head", "INTEGER")
+        addColumn("tracks", "gapless_tail", "INTEGER")
+        addColumn("tracks", "gapless_mtime", "REAL")
 
         // Unicode-aware, case- and diacritic-insensitive full-text index.
         exec("""
@@ -306,6 +313,105 @@ actor Database {
             result[path] = sqlite3_column_double(stmt, 1)
         }
         return result
+    }
+
+    // MARK: - Gapless
+
+    /// One track as the seam scan sees it: enough to group it into an album, and enough
+    /// to know whether it has already been looked at.
+    struct SeamTrack: Sendable {
+        let path: String
+        let album: String
+        let disc: Int
+        let number: Int
+        let codec: String
+        let mtime: Double
+        /// The mtime the seam scan last saw. nil = never checked.
+        let checkedMtime: Double?
+    }
+
+    func seamTracks() -> [SeamTrack] {
+        let sql = """
+        SELECT path,
+               COALESCE(NULLIF(ov_album,''), NULLIF(album,''), ''),
+               COALESCE(disc_no, 1),
+               COALESCE(NULLIF(ov_track_no,0), track_no, 0),
+               COALESCE(codec,''),
+               COALESCE(mtime, 0),
+               gapless_mtime
+        FROM tracks
+        WHERE duration IS NOT NULL AND duration > 0
+        """
+        guard let stmt = prepare(sql) else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        var out: [SeamTrack] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            out.append(SeamTrack(
+                path: String(cString: sqlite3_column_text(stmt, 0)),
+                album: String(cString: sqlite3_column_text(stmt, 1)),
+                disc: Int(sqlite3_column_int64(stmt, 2)),
+                number: Int(sqlite3_column_int64(stmt, 3)),
+                codec: String(cString: sqlite3_column_text(stmt, 4)),
+                mtime: sqlite3_column_double(stmt, 5),
+                checkedMtime: sqlite3_column_type(stmt, 6) == SQLITE_NULL
+                    ? nil : sqlite3_column_double(stmt, 6)))
+        }
+        return out
+    }
+
+    /// Record what the seam scan found for a batch of tracks. A track it looked at and
+    /// found nothing to trim on is still recorded — that is what stops it being looked
+    /// at again next launch.
+    func setGaplessTrims(_ results: [(path: String, trim: GaplessTrim, mtime: Double)]) {
+        exec("BEGIN")
+        let sql = """
+        UPDATE tracks SET gapless_head = ?, gapless_tail = ?, gapless_mtime = ? WHERE path = ?
+        """
+        if let stmt = prepare(sql) {
+            for r in results {
+                sqlite3_reset(stmt)
+                sqlite3_bind_int64(stmt, 1, Int64(r.trim.head))
+                sqlite3_bind_int64(stmt, 2, Int64(r.trim.tail))
+                sqlite3_bind_double(stmt, 3, r.mtime)
+                bindText(stmt, 4, r.path)
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+        exec("COMMIT")
+    }
+
+    /// Every trim worth applying, for the decoder to consult.
+    func gaplessTrims() -> [String: GaplessTrim] {
+        let sql = """
+        SELECT path, gapless_head, gapless_tail FROM tracks
+        WHERE (COALESCE(gapless_head,0) > 0 OR COALESCE(gapless_tail,0) > 0)
+        """
+        guard let stmt = prepare(sql) else { return [:] }
+        defer { sqlite3_finalize(stmt) }
+
+        var out: [String: GaplessTrim] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            out[String(cString: sqlite3_column_text(stmt, 0))] = GaplessTrim(
+                head: Int(sqlite3_column_int64(stmt, 1)),
+                tail: Int(sqlite3_column_int64(stmt, 2)))
+        }
+        return out
+    }
+
+    /// Forget a file's measurement — after its bytes were rewritten to carry the trim
+    /// themselves, so that trimming it again at playback would cut into the music.
+    func clearGaplessTrim(path: String, mtime: Double) {
+        guard let stmt = prepare("""
+        UPDATE tracks SET gapless_head = 0, gapless_tail = 0, gapless_mtime = ?, mtime = ?
+        WHERE path = ?
+        """) else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_double(stmt, 1, mtime)
+        sqlite3_bind_double(stmt, 2, mtime)
+        bindText(stmt, 3, path)
+        sqlite3_step(stmt)
     }
 
     private func allTrackPaths() -> [String] {

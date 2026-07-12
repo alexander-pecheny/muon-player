@@ -63,7 +63,7 @@ xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer \
 Tests use **Swift Testing** (`@Test`/`#expect`), not XCTest. The XCTest summary
 line prints `Executed 0 tests` — that's expected; the real results are the
 `✔ Test …` / `✔ Test run with N tests in M suites passed` lines (currently
-62 tests in 14 suites).
+73 tests in 17 suites).
 
 ## Build & run the Mac app
 
@@ -187,33 +187,77 @@ swiftc -O scripts/muon-albumartist.swift MuonPlayer/Library/TagWriter.swift \
 /tmp/muon-albumartist --prefix SOULOUD --apply
 ```
 
-`scripts/muon-gapless.swift` finds the album transitions meant to be seamless, and
-the ones that are meant to be but aren't. It reads the library DB, then decodes the
-last and first 500 ms of each adjacent pair through the `ffmpeg` CLI — the same
-decoder the app plays through, so a defect it finds is one you would hear.
+### In the app: the seam scan runs itself
+
+Every library scan is followed by a **seam pass** (`Library/GaplessMaintenance.swift`),
+detached and off the main actor, so the fast scan is never held up by it. It measures the
+silence stranded at each album transition, records it per track, and the decoder skips it
+from then on. A track carries the mtime it was measured at (`tracks.gapless_mtime`), so an
+ordinary relaunch measures nothing; only a file that actually changed is looked at again.
+A first pass over 12.7k tracks takes ~13 s.
+
+> Not `.background` priority, which sounds right and is not — that QoS is confined to the
+> efficiency cores, and it turned those 13 seconds into **nine minutes**. `.utility`, and a
+> sliding window rather than a barrier per batch.
+
+What it does with a broken seam is `GaplessFixMode` (Settings → Gapless):
+
+- **`playbackOnly`** (default) — the measurement goes into `tracks.gapless_head/_tail` and
+  `FFmpegDecoder` trims it at decode, exactly as it already trims from `iTunSMPB`. No file
+  is touched. This is the only fix that works for **every** format: a gap in a FLAC or an
+  Opus is real silence in the audio that no tag could ever take back, but the decoder can
+  simply not play it. On a real library: 55 seams closed of 181, across aac/mp3/vorbis/
+  opus/flac.
+- **`rewriteSourceFiles`** — additionally writes the LAME header into the MP3s, so other
+  players get the fix too. Originals are copied whole into Application Support first, each
+  write is verified by decoding it back, and anything that does not come back clean is
+  restored on the spot.
+
+The tail trim cannot be a `targetOutputFrames` cap: a file that needs measuring is a file
+whose declared duration is a guess (a Xing-less VBR mp3 has only a bitrate estimate). So
+the decoder runs `holdOutputFrames` behind itself and drops what is left at EOF.
+
+Everything it judges and every file it touches goes to **`Application Support/gapless.log`**
+on both platforms — the logic changes what you hear and, in one mode, what is on disk, so
+"did we touch this file, and what did we think we measured?" has to stay answerable.
+
+### The CLI
+
+The **`MuonGapless`** target finds the album transitions meant to be seamless, and the
+ones that are meant to be but aren't. The judging is app code — `Audio/GaplessScan.swift`
+(the verdicts) on top of `Audio/EdgeDecoder.swift` (the last and first 500 ms of a file,
+at its native rate) — so a defect it reports is one the player would play. `MuonGapless/`
+is just the front end: read the DB, fan out, print.
 
 ```bash
-swiftc -O scripts/muon-gapless.swift -o /tmp/muon-gapless && /tmp/muon-gapless
-/tmp/muon-gapless --html > ~/Desktop/muon-gapless.html          # the readable report
-swift scripts/muon-gapless.swift --json --filter "Pink Floyd"   # slow: unoptimized
-python3 scripts/test-muon-gapless.py                            # synthetic suite
+xcodebuild -project MuonPlayer.xcodeproj -scheme MuonGapless -configuration Release \
+  -destination 'platform=macOS,arch=arm64' build
+G=$(find ~/Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/Release \
+  -maxdepth 1 -name muon-gapless | head -1)
+
+"$G"                                        # the report
+"$G" --html > ~/Desktop/muon-gapless.html   # the readable one
+"$G" --json --filter "Pink Floyd"
+python3 scripts/test-muon-gapless.py        # synthetic suite (builds the target itself)
 ```
 
 Seams are split into **loud** and **quiet** by the level of their *quieter* side
 (`--loud-db`, default −25). Most seams are quiet — two hushed outros touching — and a
 song crashing straight into the next one is a different thing worth picking out.
 
-> Anything that shells out per file must open its `Process` inside an
-> `autoreleasepool` and close both ends of the `Pipe` by hand. Foundation leaves the
-> parent's copy of the pipe to the pool, so a tight concurrent loop of spawns runs the
-> process out of descriptors and `run()` starts throwing EBADF. An early version of
-> this scanner swallowed those failures and silently skipped two thirds of the library
-> while reporting a clean bill of health — which is why a failed decode is now counted
-> and shouted about instead.
+It decodes **in-process**, through the FFmpeg the app links. It used to shell out to the
+`ffmpeg` CLI, which cost 27 ms of process startup to do 2 ms of work — 25k spawns, and
+~100% of a 132 s scan was fork/exec. In-process the same library takes **9 s**. Work is
+fanned out one album per core, and a track's two windows come from a single open of the
+file (its head is wanted by the seam before it, its tail by the seam after).
 
-Compile it — in `swift`'s interpreter the per-sample loops are ~10× slower. Work is
-fanned out one seam per core (a seam's two decodes are shared with no other seam);
-a 12.7k-track library takes under a minute.
+> The lesson from the CLI era, still true of anything that shells out per file
+> (`muon-cloud-sync`): open the `Process` inside an `autoreleasepool` and close both ends
+> of the `Pipe` by hand. Foundation leaves the parent's copy of the pipe to the pool, so a
+> tight concurrent loop of spawns runs the process out of descriptors and `run()` starts
+> throwing EBADF. An early version of this scanner swallowed those failures and silently
+> skipped two thirds of the library while reporting a clean bill of health — which is why
+> a failed decode is counted and shouted about instead.
 
 Only a transition where **both** files are still sounding at the seam is reported —
 the usual fade-to-silence boundary is skipped, which is what keeps the report short.
@@ -245,7 +289,7 @@ frames and ID3 tags are copied byte for byte (`TagWriter.writeMP3Gapless`).
 ```bash
 swiftc -O scripts/muon-fix-gapless.swift MuonPlayer/Library/TagWriter.swift \
   -o /tmp/muon-fix-gapless
-/tmp/muon-gapless --json > /tmp/plan.json
+"$G" --json > /tmp/plan.json
 /tmp/muon-fix-gapless --plan /tmp/plan.json                    # dry run (default)
 /tmp/muon-fix-gapless --plan /tmp/plan.json --apply
 /tmp/muon-fix-gapless --restore ~/.muon-gapless-backups/<stamp>
@@ -267,6 +311,14 @@ any of this:
   `FFmpegDecoder`'s `targetOutputFrames`. Writing tags into these files would achieve
   nothing.
 - **FLAC/Opus/Vorbis** gaps are real silence in the audio. No tag takes that back.
+
+> A trap that bit both the player and the scanner: when FFmpeg drops a codec's priming
+> itself (Opus's 312-sample pre-skip, AAC's 64), it shrinks the frame but leaves the pts
+> **negative** — it warns "Could not update timestamps for skipped samples" and means it.
+> Take that pts at face value while working out how much priming is left to skip and you
+> skip it twice, eating the first 6.5 ms of every Opus track. So a pts-derived sample
+> cursor is clamped at 0 (`FFmpegDecoder.consumeSkip`, `EdgeDecoder.pump`); a negative one
+> only ever means *already trimmed*. `OpusPreskipTests` guards it.
 
 Three rules keep it from making a library worse. Silence longer than the 12-bit LAME
 fields can express (4095 samples ≈ 93 ms) is silence somebody *meant*, and is left

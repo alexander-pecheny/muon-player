@@ -87,7 +87,25 @@ final class LibraryStore {
         albums = await database.albums()
         reindexAlbums()
         trackCount = await database.trackCount()
+        GaplessTrims.shared.replaceAll(await database.gaplessTrims())
         version &+= 1
+    }
+
+    /// The seam scan: measure the encoder delay/padding stranded at each album transition
+    /// and record it, so the decoder can trim it away.
+    ///
+    /// It runs *after* the library is up, detached and at background priority. The fast
+    /// scan is what the user is waiting for — this only decides how the music will sound
+    /// once they press play, and a track already measured is never measured again, so on
+    /// an ordinary relaunch it finds nothing to do and costs nothing.
+    private var gaplessTask: Task<Void, Never>?
+
+    private func startGaplessMaintenance() {
+        gaplessTask?.cancel()
+        let database = self.database
+        gaplessTask = Task.detached(priority: .utility) {
+            await GaplessMaintenance.run(database: database)
+        }
     }
 
     /// Lookup tables derived from `albums`, rebuilt whenever it is reloaded.
@@ -180,6 +198,7 @@ final class LibraryStore {
         await database.pruneMissing(existingPaths: existingPaths,
                                     underFolders: pruneScope?.map(LibraryRoot.canonicalPath(of:)))
         await loadFromDatabase()
+        startGaplessMaintenance()
     }
 
     /// Read metadata for the given files concurrently and upsert the results.
