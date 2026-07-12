@@ -251,9 +251,23 @@ struct Finding {
     let to: SeamTrack
     let wrap: Bool
     let verdict: SeamVerdict
+    /// What the repair would do about it — only a `gap` has one. A `click` or a `hole` is
+    /// damage in the samples themselves, which no amount of trimming puts back.
+    let repair: SeamScan.Repair?
 
     var kind: SeamKind { verdict.kind }
     var isLoud: Bool { verdict.isLoud(opts.t) }
+
+    /// Whether the seam is left broken once the algorithm has done what it can.
+    var stillBroken: Bool {
+        switch kind {
+        case .flow: return false
+        case .click, .hole: return true
+        case .gap:
+            if case .trim = repair { return false }
+            return true
+        }
+    }
 }
 
 let all = (opts.folder.map(readFolder) ?? readTracks()).filter { t in
@@ -305,7 +319,9 @@ DispatchQueue.concurrentPerform(iterations: library.count) { i in
                                            tailLossy: a.isLossy, headLossy: b.isLossy,
                                            codec: a.codec, opts.t)
         else { continue }
-        found.append(Finding(album: album, from: a, to: b, wrap: seam.wrap, verdict: verdict))
+        let repair = verdict.kind == .gap ? SeamScan.repair(tail: tail, head: head, opts.t) : nil
+        found.append(Finding(album: album, from: a, to: b, wrap: seam.wrap,
+                             verdict: verdict, repair: repair))
     }
 
     lock.lock()
@@ -620,7 +636,7 @@ func html(_ findings: [Finding], albums: Int) -> String {
 
 if opts.json {
     let rows = findings.map { f -> [String: Any] in
-        [
+        var row: [String: Any] = [
             "kind": f.kind.rawValue,
             "artist": f.album.artist, "album": f.album.album, "directory": f.album.directory,
             "from": f.from.path, "to": f.to.path,
@@ -633,7 +649,20 @@ if opts.json {
             "levelDb": f.verdict.levelDb, "loud": f.isLoud,
             "gapMs": f.verdict.gapMs, "stepRatio": f.verdict.ratio, "step": f.verdict.step,
             "note": f.verdict.note,
+            "stillBroken": f.stillBroken,
         ]
+        switch f.repair {
+        case .trim(let tail, let head):
+            row["repairable"] = true
+            row["trimTailSamples"] = tail
+            row["trimHeadSamples"] = head
+        case .refused(let why):
+            row["repairable"] = false
+            row["refused"] = why
+        case nil:
+            break
+        }
+        return row
     }
     let data = try! JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
     print(String(data: data, encoding: .utf8)!)
@@ -692,4 +721,36 @@ print("""
 \(findings.count) seamless transitions: \(loudCount) loud, \(findings.count - loudCount) quiet — \
 \(clicks) with a click, \(holes) with a hole, \(gaps) broken by encoder padding
 """)
+
+/// How each album fares, counted over the albums that have a seam at all — an album with
+/// no seamless transition in it has nothing to get right or wrong.
+///
+/// "Fixed" means every broken seam in it is a gap the trim closes. An album with one seam
+/// mended and another that cannot be is *not* fixed: it still clicks, and saying otherwise
+/// would be the flattering answer rather than the true one.
+func breakdown(_ group: [Finding]) -> String {
+    let byAlbum = Dictionary(grouping: group) { "\($0.album.directory)\u{1}\($0.album.disc)" }
+    var clean = 0, fixed = 0, stuck = 0
+    for (_, seams) in byAlbum {
+        let broken = seams.filter { $0.kind != .flow }
+        if broken.isEmpty { clean += 1 }
+        else if seams.contains(where: \.stillBroken) { stuck += 1 }
+        else { fixed += 1 }
+    }
+    let n = byAlbum.count
+    func pc(_ x: Int) -> String { n == 0 ? "—" : String(format: "%.0f%%", Double(x) / Double(n) * 100) }
+    return """
+      \(n) albums
+        \(clean) (\(pc(clean)))\tseamless already
+        \(fixed) (\(pc(fixed)))\tfixed — every broken seam is padding the trim removes
+        \(stuck) (\(pc(stuck)))\tstill broken — a click, a hole, or a gap that cannot be closed
+    """
+}
+
+let withSeams = findings.filter { _ in true }
+print("Albums with any seam:\n\(breakdown(withSeams))\n")
+let loudGroups = Set(findings.filter(\.isLoud).map { "\($0.album.directory)\u{1}\($0.album.disc)" })
+print("Albums with a loud seam — the transitions you notice:\n"
+    + breakdown(findings.filter { loudGroups.contains("\($0.album.directory)\u{1}\($0.album.disc)") }))
+
 if !opts.verbose, clicks + gaps == 0 { print("(nothing broken; --verbose lists the clean seams)") }
