@@ -1,3 +1,5 @@
+> **The main repository of this project lives at https://code.pecheny.me/pecheny/muon-player. All issues should be created there.**
+
 # MuonPlayer
 
 A gapless, FFmpeg-powered music player for iOS **and macOS**, with a foobar-style
