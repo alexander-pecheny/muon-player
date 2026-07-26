@@ -96,6 +96,11 @@ final class Player {
     private var ticker: Timer?
     private var lastReportedTrackID: UUID?
     private var reportedTrackStartFrame: AVAudioFramePosition = 0
+    // Last position the node actually reported, so a teardown can still say how
+    // much played after the node has stopped reporting one.
+    private var lastSampleTime: AVAudioFramePosition = 0
+    private var wasPlayingWhenInterrupted = false
+    private var sessionLost = false
 
     init() {
         // Restore the persisted playback mode. Assigning a stored property inside
@@ -108,6 +113,7 @@ final class Player {
         }
         setupEngine()
         setupRemoteCommands()
+        observeInterruptions()
     }
 
     private func setupEngine() {
@@ -218,15 +224,20 @@ final class Player {
     }
 
     func resume() {
-        guard currentTrack != nil else { return }
-        do {
-            if !engine.isRunning { try engine.start() }
-            node.play()
-            isPlaying = true
-            updateNowPlayingInfo()
-        } catch {
-            print("resume failed: \(error)")
+        guard let track = currentTrack else { return }
+        reclaimSession()
+        // An interruption (another app taking the audio session) stops the engine
+        // under us, and what the feeder had in flight — scheduled buffers and the
+        // completion callbacks that pull the next ones — does not survive it
+        // intact. Re-feed from where we stood rather than pressing play on a graph
+        // in an unknown state.
+        guard engine.isRunning else {
+            beginPlayback(track, offset: currentTime)
+            return
         }
+        node.play()
+        isPlaying = true
+        updateNowPlayingInfo()
     }
 
     func next() {
@@ -286,6 +297,7 @@ final class Player {
         // and end-of-queue paths only cover tracks that finish on their own. A
         // seek or replay of the same track is ignored (see reportOutgoingFinished).
         reportOutgoingFinished(replacedBy: track.id)
+        reclaimSession()
 
         reachedEnd = false
         currentTrack = track
@@ -440,9 +452,13 @@ final class Player {
 
     private func stopTicker() { ticker?.invalidate(); ticker = nil }
 
-    private var currentSampleTime: AVAudioFramePosition {
+    /// Where the node is playing, or nil when it isn't rendering at all — which is
+    /// what an interruption from another app leaves behind. Reading that as frame
+    /// zero is what used to snap the app back to the track the user had started,
+    /// discarding everything the queue had played since.
+    private var currentSampleTime: AVAudioFramePosition? {
         guard let render = node.lastRenderTime,
-              let playerTime = node.playerTime(forNodeTime: render) else { return 0 }
+              let playerTime = node.playerTime(forNodeTime: render) else { return nil }
         return playerTime.sampleTime
     }
 
@@ -456,14 +472,15 @@ final class Player {
     private func reportOutgoingFinished(replacedBy newTrackID: UUID?) {
         guard let prevID = lastReportedTrackID, prevID != newTrackID,
               let prev = segments.segment(withID: prevID) else { return }
-        let played = max(0, Double(currentSampleTime - reportedTrackStartFrame) / CanonicalAudio.sampleRate)
+        let frame = currentSampleTime ?? lastSampleTime
+        let played = max(0, Double(frame - reportedTrackStartFrame) / CanonicalAudio.sampleRate)
         lastReportedTrackID = nil
         onTrackFinished?(prev.track, played)
     }
 
     private func tick() {
-        guard isPlaying else { return }
-        let frame = currentSampleTime
+        guard isPlaying, let frame = currentSampleTime else { return }
+        lastSampleTime = frame
         guard let seg = segments.segment(atFrame: frame) else {
             if noMoreAudioSnapshot() && frame >= segments.lastEndFrame() { finishAtEnd() }
             return
@@ -561,6 +578,62 @@ final class Player {
             }
         }
     }
+
+    // MARK: - Interruptions
+
+    /// Another app taking the audio session (a call, a video, another player)
+    /// stops our engine without telling the player anything, so without this the
+    /// app goes on believing it is playing while the node has gone silent.
+    private func observeInterruptions() {
+        #if os(iOS)
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: nil
+        ) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let opts = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            Task { @MainActor in
+                self?.handleInterruption(raw.flatMap(AVAudioSession.InterruptionType.init),
+                                         AVAudioSession.InterruptionOptions(rawValue: opts))
+            }
+        }
+        #endif
+    }
+
+    /// An interruption deactivates our audio session, and nothing plays again
+    /// until it is claimed back — starting the engine doesn't do it for us.
+    private func reclaimSession() {
+        #if os(iOS)
+        guard sessionLost else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            sessionLost = false
+        } catch {
+            print("audio session reactivate failed: \(error)")
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    private func handleInterruption(_ type: AVAudioSession.InterruptionType?,
+                                    _ options: AVAudioSession.InterruptionOptions) {
+        switch type {
+        case .began:
+            wasPlayingWhenInterrupted = isPlaying
+            sessionLost = true
+            pause()
+        case .ended:
+            guard wasPlayingWhenInterrupted else { return }
+            wasPlayingWhenInterrupted = false
+            // Only resume when the interruption was transient (a call ending). An
+            // app that took the session for good doesn't set this, and grabbing it
+            // back from it would be rude.
+            guard options.contains(.shouldResume) else { return }
+            resume()
+        default:
+            break
+        }
+    }
+    #endif
 
     private func setupRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
