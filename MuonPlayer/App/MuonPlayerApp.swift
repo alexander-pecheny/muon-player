@@ -45,6 +45,7 @@ struct MuonPlayerApp: App {
                         scrobbler.scrobbleEligible(track)
                     }
                     scrobbler.start()
+                    DemoLibrary.seedIfNeeded()
                     await library.loadFromDatabase()
                     await library.rescan()
 
@@ -66,8 +67,11 @@ struct MuonPlayerApp: App {
                     if ArtworkSelfTest.isEnabled {
                         await ArtworkSelfTest.run(library: library)
                     }
-                    if ProcessInfo.processInfo.environment["MUON_LOGIN_TEST"] != nil {
-                        let ok = await scrobbler.logIn(username: Secrets.lastFMUsername, password: Secrets.lastFMPassword)
+                    // Credentials come from the environment, never from Secrets.swift:
+                    // a literal there ships inside the App Store binary.
+                    if let user = ProcessInfo.processInfo.environment["MUON_LOGIN_TEST_USER"],
+                       let password = ProcessInfo.processInfo.environment["MUON_LOGIN_TEST_PASSWORD"] {
+                        let ok = await scrobbler.logIn(username: user, password: password)
                         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                         try? "ok=\(ok) loggedIn=\(scrobbler.isLoggedIn) user=\(scrobbler.username ?? "nil") err=\(scrobbler.lastError ?? "none")"
                             .write(to: docs.appendingPathComponent("login.done"), atomically: true, encoding: .utf8)
