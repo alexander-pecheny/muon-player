@@ -63,7 +63,7 @@ xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer \
 Tests use **Swift Testing** (`@Test`/`#expect`), not XCTest. The XCTest summary
 line prints `Executed 0 tests` — that's expected; the real results are the
 `✔ Test …` / `✔ Test run with N tests in M suites passed` lines (currently
-73 tests in 17 suites).
+80 tests in 18 suites).
 
 ## Build & run the Mac app
 
@@ -146,6 +146,44 @@ xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer -configuration Debug
 APP=$(find ~/Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/Debug-iphoneos -maxdepth 1 -name MuonPlayer.app | head -1)
 xcrun devicectl device install app --device "$DEV_ID" "$APP"
 ```
+
+## TestFlight
+
+```bash
+scripts/testflight.sh ios     # or: mac
+```
+
+It archives Release, exports, validates and uploads. `DEVELOPMENT_TEAM`,
+`ASC_KEY_ID` and `ASC_ISSUER_ID` come from `.env`; the API key itself lives in
+`~/.appstoreconnect/private_keys/AuthKey_<id>.p8`, where `altool` finds it.
+
+The Mac target is pinned to `ARCHS: arm64`. A Release **archive** builds every
+architecture rather than just the active one, and `Vendor/FFmpeg` ships only a
+`macos-arm64` slice, so an unpinned archive dies at `Ld ... x86_64`. Debug builds
+never hit it. Building the x86_64 slice would lift the pin and let the app run on
+Intel Macs.
+
+The build number is `git rev-list --count HEAD` unless `CURRENT_PROJECT_VERSION`
+overrides it — App Store Connect rejects a re-used one, and a commit count only
+ever goes up. Both `Info.plist`s read `$(MARKETING_VERSION)`/
+`$(CURRENT_PROJECT_VERSION)`, set in `project.yml`, so the version lives in one
+place.
+
+`MuonPlayer/PrivacyInfo.xcprivacy` sits in the shared source dir and so ships in
+**both** bundles. It declares `UserDefaults` (`CA92.1`) and the file-timestamp
+reads the scanner does (`C617.1` for the iOS Documents container, `3B52.1` for
+the folders a Mac user picks). Without it the upload is rejected by email before
+review ever sees it. It declares **no** collected data, and App Store Connect has
+to keep saying the same: a scrobble is transmitted to the user's own Last.fm
+account under their own credentials, so neither we nor a partner of ours can
+reach it, and with no login the app never contacts Last.fm at all. Apple's test
+is whether *you or your third-party partners* gain access — not whether bytes
+leave the device.
+
+Never let a credential reach `Secrets.swift` beyond the Last.fm API key/secret —
+string literals are readable in the shipped binary. The login self-test takes
+`MUON_LOGIN_TEST_USER`/`MUON_LOGIN_TEST_PASSWORD` from the environment for that
+reason.
 
 ## Library maintenance
 

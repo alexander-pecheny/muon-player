@@ -8,6 +8,10 @@ options:
 settings:
   SWIFT_VERSION: "5.0"
   IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  # Both Info.plists read these, so a TestFlight upload only needs
+  # CURRENT_PROJECT_VERSION overridden on the xcodebuild command line.
+  MARKETING_VERSION: "1.0"
+  CURRENT_PROJECT_VERSION: "1"
 
 # Both apps share everything but the UI: MuonPlayer/{Audio,Library,Models,
 # Playback,Scanner,Scrobble,Shared} is compiled into each target, while
@@ -24,6 +28,8 @@ targets:
       path: MuonPlayer/Info.plist
       properties:
         CFBundleDevelopmentRegion: en
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
         LSRequiresIPhoneOS: true
@@ -54,6 +60,7 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: me.pecheny.muonplayer
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      TARGETED_DEVICE_FAMILY: "1"   # the UI is iPhone-only
       HEADER_SEARCH_PATHS:
         - $(SRCROOT)/Vendor/FFmpeg/include
       OTHER_SWIFT_FLAGS:
@@ -78,8 +85,8 @@ targets:
         CFBundleDevelopmentRegion: en
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
     entitlements:
@@ -111,6 +118,9 @@ targets:
       MACOSX_DEPLOYMENT_TARGET: "14.0"
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       ENABLE_HARDENED_RUNTIME: YES
+      # A Release archive builds every architecture, and Vendor/FFmpeg carries
+      # only macos-arm64. Drop this once an x86_64 slice exists.
+      ARCHS: arm64
       HEADER_SEARCH_PATHS:
         - $(SRCROOT)/Vendor/FFmpeg/include
       OTHER_SWIFT_FLAGS:
