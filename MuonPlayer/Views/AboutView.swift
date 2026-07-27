@@ -17,6 +17,9 @@ struct AboutView: View {
 
             Section {
                 Text("MuonPlayer is open-source software, released under the MIT License.")
+                Link(destination: URL(string: "https://muonplayer.pecheny.me/privacy")!) {
+                    Label("Privacy Policy", systemImage: "hand.raised")
+                }
             } header: {
                 Text("MuonPlayer")
             }
