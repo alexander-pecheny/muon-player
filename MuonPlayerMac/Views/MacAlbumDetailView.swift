@@ -13,6 +13,9 @@ struct MacAlbumDetailView: View {
     @State private var tracks: [Track] = []
     @State private var editing = false
     @State private var didFocus = false
+    // This album's own artwork color, independent of what's playing — so a red
+    // album never gets tinted by a green now-playing track (and vice versa).
+    @State private var albumAccent: Color = .neutralAccent
 
     init(album: Album, focusPath: String? = nil) {
         _album = State(initialValue: album)
@@ -80,6 +83,16 @@ struct MacAlbumDetailView: View {
                 }
             }
             .task(id: library.version) { await reload(scrollingWith: proxy) }
+        }
+        // The album page wears its own color (Play button, current-track row); the
+        // player bar and sidebar outside it keep the now-playing one.
+        .artworkAccent(albumAccent)
+        .task(id: album.artworkPath) {
+            guard let path = album.artworkPath,
+                  let image = await library.artwork(forPath: path) else {
+                albumAccent = .neutralAccent; return
+            }
+            albumAccent = DominantColor.from(image) ?? .neutralAccent
         }
         .navigationTitle(album.title)
         .toolbar {

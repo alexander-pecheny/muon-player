@@ -51,7 +51,7 @@ struct MacRootView: View {
 
             MacPlayerBar()
         }
-        .tint(player.accentColor)
+        .artworkAccent(player.accentColor)
         // A query typed while drilled into an album would otherwise stay hidden
         // behind it — the results only replace the section root.
         .onChange(of: router.searchQuery) { _, new in
