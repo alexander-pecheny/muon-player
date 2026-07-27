@@ -13,6 +13,7 @@ struct MacTrackRow: View {
     @Environment(Player.self) private var player
     @Environment(LibraryStore.self) private var library
     @Environment(MacRouter.self) private var router
+    @Environment(\.artworkAccent) private var accent
     @State private var editing = false
 
     private var isCurrent: Bool { player.currentTrack?.url == track.url }
@@ -24,7 +25,7 @@ struct MacTrackRow: View {
                 Group {
                     if isCurrent {
                         Image(systemName: player.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
-                            .foregroundStyle(player.accentColor)
+                            .foregroundStyle(accent)
                     } else if let n = track.trackNo {
                         Text("\(n)").foregroundStyle(.secondary)
                     }
@@ -41,7 +42,7 @@ struct MacTrackRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(track.title)
                     .lineLimit(1)
-                    .foregroundStyle(isCurrent ? player.accentColor : .primary)
+                    .foregroundStyle(isCurrent ? accent : .primary)
                 if showArtwork {
                     HStack(spacing: 4) {
                         Button { router.openArtist(track.effectiveAlbumArtist) } label: {

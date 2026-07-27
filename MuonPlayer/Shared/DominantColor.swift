@@ -26,6 +26,28 @@ extension Color {
     }
 }
 
+private struct ArtworkAccentKey: EnvironmentKey {
+    static let defaultValue: Color = .neutralAccent
+}
+
+extension EnvironmentValues {
+    /// The accent of whatever page a view sits on: the now-playing artwork's color
+    /// app-wide, an album's own color inside that album's page. Read it instead of
+    /// `player.accentColor` in anything that can appear in both places.
+    var artworkAccent: Color {
+        get { self[ArtworkAccentKey.self] }
+        set { self[ArtworkAccentKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Tint this subtree with `color` and publish it, so that views drawing the
+    /// accent by hand agree with the ones SwiftUI tints for us.
+    func artworkAccent(_ color: Color) -> some View {
+        tint(color).environment(\.artworkAccent, color)
+    }
+}
+
 enum DominantColor {
     /// sRGB components, 0...1.
     struct RGB: Equatable, Sendable {
