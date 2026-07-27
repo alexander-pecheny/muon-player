@@ -27,6 +27,8 @@ struct MacAboutView: View {
             Button("FFmpeg — LGPL 2.1…") { showLicense = true }
                 .buttonStyle(.link)
 
+            Link("Privacy Policy", destination: URL(string: "https://muonplayer.pecheny.me/privacy")!)
+
             Spacer(minLength: 0)
         }
         .padding(20)

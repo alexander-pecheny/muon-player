@@ -70,8 +70,6 @@ Two artifacts are generated locally and are **not** checked into the repo:
 cat > .env <<'EOF'
 LAST_FM_API_KEY=your_key
 LAST_FM_API_SECRET=your_secret
-LAST_FM_LOGIN=your_username     # optional
-LAST_FM_PASSWORD=your_password  # optional
 EOF
 ./scripts/gen-secrets.sh
 

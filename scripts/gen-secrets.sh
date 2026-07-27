@@ -12,8 +12,6 @@ import Foundation
 enum Secrets {
     static let lastFMApiKey = "${LAST_FM_API_KEY:-}"
     static let lastFMApiSecret = "${LAST_FM_API_SECRET:-}"
-    static let lastFMUsername = "${LAST_FM_LOGIN:-}"
-    static let lastFMPassword = "${LAST_FM_PASSWORD:-}"
 }
 EOF
 echo "wrote MuonPlayer/Secrets.swift"
