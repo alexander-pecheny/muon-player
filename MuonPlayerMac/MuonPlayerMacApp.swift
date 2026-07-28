@@ -43,6 +43,15 @@ struct MuonPlayerMacApp: App {
         .windowToolbarStyle(.unified)
         .commands { MuonCommands(player: player, library: library, folders: folders, router: router) }
 
+        // A window rather than a sheet: a sheet tall enough for a cover resizes
+        // the main window under it, which then stays displaced after it closes.
+        WindowGroup(id: MacArtworkZoomView.windowID, for: String.self) { $path in
+            if let path {
+                MacArtworkZoomView(path: path).environment(library)
+            }
+        }
+        .windowStyle(.hiddenTitleBar)
+
         Settings {
             MacSettingsView()
                 .environment(library)

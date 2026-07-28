@@ -41,7 +41,7 @@ struct MacTrackRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(track.title)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(isCurrent ? accent : .primary)
                 if showArtwork {
                     HStack(spacing: 4) {

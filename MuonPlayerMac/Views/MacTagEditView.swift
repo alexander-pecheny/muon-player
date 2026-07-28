@@ -63,7 +63,7 @@ struct MacTagEditView: View {
     private func field(_ label: String, _ key: String, text: Binding<String>) -> some View {
         LabeledContent(label) {
             HStack(spacing: 6) {
-                TextField(label, text: text)
+                TextField(label, text: text).labelsHidden()
                 if model.isChanged(key) {
                     Circle().fill(player.accentColor).frame(width: 7, height: 7)
                 }

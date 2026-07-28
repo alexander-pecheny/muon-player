@@ -18,21 +18,28 @@ final class ArtworkCache {
         cache.countLimit = 500
     }
 
-    func image(for path: String) -> PlatformImage? { cache.object(forKey: path as NSString) }
-    func isKnownMiss(_ path: String) -> Bool { misses.contains(path) }
+    /// A thumbnail and a full-size decode of the same cover are different images,
+    /// so the size is part of the identity.
+    private func key(_ path: String, _ maxPixel: Int) -> String { "\(maxPixel)|\(path)" }
+
+    func image(for path: String, maxPixel: Int = 400) -> PlatformImage? {
+        cache.object(forKey: key(path, maxPixel) as NSString)
+    }
+    func isKnownMiss(_ path: String, maxPixel: Int = 400) -> Bool { misses.contains(key(path, maxPixel)) }
 
     /// The cached image, loading it (once) if needed.
-    func load(path: String, from library: LibraryStore) async -> PlatformImage? {
-        if let cached = image(for: path) { return cached }
-        if isKnownMiss(path) { return nil }
-        if let running = inFlight[path] { return await running.value }
+    func load(path: String, maxPixel: Int = 400, from library: LibraryStore) async -> PlatformImage? {
+        let key = key(path, maxPixel)
+        if let cached = image(for: path, maxPixel: maxPixel) { return cached }
+        if isKnownMiss(path, maxPixel: maxPixel) { return nil }
+        if let running = inFlight[key] { return await running.value }
 
-        let task = Task<PlatformImage?, Never> { await library.artwork(forPath: path) }
-        inFlight[path] = task
+        let task = Task<PlatformImage?, Never> { await library.artwork(forPath: path, maxPixel: maxPixel) }
+        inFlight[key] = task
         let image = await task.value
-        inFlight[path] = nil
+        inFlight[key] = nil
 
-        if let image { cache.setObject(image, forKey: path as NSString) } else { misses.insert(path) }
+        if let image { cache.setObject(image, forKey: key as NSString) } else { misses.insert(key) }
         return image
     }
 }
@@ -41,6 +48,8 @@ final class ArtworkCache {
 struct ArtworkView: View {
     let path: String?
     var cornerRadius: CGFloat = 6
+    /// Cap on the decoded size. Raise it for art shown larger than a thumbnail.
+    var maxPixel: Int = 400
 
     @Environment(LibraryStore.self) private var library
     @State private var image: PlatformImage?
@@ -79,10 +88,10 @@ struct ArtworkView: View {
         guard let path else { image = nil; return }
         // Synchronous cache hit: assigning before any await keeps an already-decoded
         // cover from flashing its placeholder for a frame while scrolling.
-        if let cached = ArtworkCache.shared.image(for: path) { image = cached; return }
+        if let cached = ArtworkCache.shared.image(for: path, maxPixel: maxPixel) { image = cached; return }
         image = nil
 
-        let loaded = await ArtworkCache.shared.load(path: path, from: library)
+        let loaded = await ArtworkCache.shared.load(path: path, maxPixel: maxPixel, from: library)
         // The cell may have been recycled onto another album mid-load.
         guard !Task.isCancelled, self.path == path else { return }
         image = loaded

@@ -12,6 +12,8 @@ struct MacAlbumDetailView: View {
     @Environment(MacRouter.self) private var router
     @State private var tracks: [Track] = []
     @State private var editing = false
+    @State private var size: CGSize = .zero
+    @Environment(\.openWindow) private var openWindow
     @State private var didFocus = false
     // This album's own artwork color, independent of what's playing — so a red
     // album never gets tinted by a green now-playing track (and vice versa).
@@ -49,40 +51,31 @@ struct MacAlbumDetailView: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            List {
-                Section { header.listRowSeparator(.hidden) }
-                // With one folder the heading is noise; with several it's the point.
-                if folderGroups.count <= 1 {
-                    Section {
-                        ForEach(tracks) { track in
-                            MacTrackRow(track: track, context: tracks, showNumber: true, showFolder: false)
-                                .id(track.url.path)
-                        }
-                    }
-                } else {
-                    ForEach(folderGroups, id: \.folder) { group in
-                        Section {
+        GeometryReader { geo in
+            ScrollViewReader { proxy in
+                List {
+                    Section { header.listRowSeparator(.hidden) }
+                    // With one folder the heading is noise; with several it's the point.
+                    if folderGroups.count <= 1 {
+                        Section { trackRows(tracks) }
+                    } else {
+                        ForEach(folderGroups, id: \.folder) { group in
                             // Context is the folder, not the album: playing a track
                             // from the FLAC rip should continue through the FLAC rip.
-                            ForEach(group.tracks) { track in
-                                MacTrackRow(track: track, context: group.tracks, showNumber: true, showFolder: false)
-                                    .id(track.url.path)
-                            }
-                        } header: {
-                            folderHeader(group)
+                            Section { trackRows(group.tracks) } header: { folderHeader(group) }
                         }
                     }
                 }
-            }
-            .listStyle(.inset)
-            .overlay {
-                if tracks.isEmpty {
-                    ContentUnavailableView("Album Is Gone", systemImage: "questionmark.folder",
-                                           description: Text("Its files are no longer in the library."))
+                .listStyle(.inset)
+                .overlay {
+                    if tracks.isEmpty {
+                        ContentUnavailableView("Album Is Gone", systemImage: "questionmark.folder",
+                                               description: Text("Its files are no longer in the library."))
+                    }
                 }
+                .onChange(of: geo.size, initial: true) { size = geo.size }
+                .task(id: library.version) { await reload(scrollingWith: proxy) }
             }
-            .task(id: library.version) { await reload(scrollingWith: proxy) }
         }
         // The album page wears its own color (Play button, current-track row); the
         // player bar and sidebar outside it keep the now-playing one.
@@ -111,6 +104,69 @@ struct MacAlbumDetailView: View {
         .sheet(isPresented: $editing) { MacTagEditView(scope: .album(album)) }
     }
 
+    /// A track row is nowhere near a window wide, so a wide window can hold two of
+    /// them. They fill top to bottom, left column first: a numbered list is read
+    /// down a column, not across the page.
+    ///
+    /// Second column only when the first one overflows — an album that already
+    /// fits reads better whole than cut in half above a field of empty space. Row
+    /// height is estimated, so the split is off by a row or two on albums with
+    /// long, wrapping titles.
+    /// Capped even when a single column has the whole window to itself: stretch a
+    /// row across a wide display and the eye loses the line between the title and
+    /// the format and duration at its far end.
+    private let columnWidth: CGFloat = 560
+    private let columnGap: CGFloat = 20
+
+    private var contentWidth: CGFloat {
+        columnWidth * CGFloat(columns) + columnGap * CGFloat(columns - 1)
+    }
+
+    private var columns: Int {
+        guard size.width >= 900 else { return 1 }
+        let rowsInView = (size.height - 400) / 26
+        return CGFloat(tracks.count) > rowsInView ? 2 : 1
+    }
+
+    private func rows(_ tracks: [Track]) -> [[Track]] {
+        guard columns > 1, tracks.count > 3 else { return tracks.map { [$0] } }
+        let half = (tracks.count + 1) / 2
+        return (0..<half).map { i in
+            i + half < tracks.count ? [tracks[i], tracks[i + half]] : [tracks[i]]
+        }
+    }
+
+    @ViewBuilder private func trackRows(_ group: [Track]) -> some View {
+        ForEach(Array(rows(group).enumerated()), id: \.offset) { _, row in
+            HStack(alignment: .top, spacing: columnGap) {
+                ForEach(row) { track in
+                    MacTrackRow(track: track, context: group, showNumber: true, showFolder: false)
+                        .frame(maxWidth: columnWidth, alignment: .leading)
+                }
+                if row.count < columns {
+                    Color.clear.frame(maxWidth: columnWidth, maxHeight: 1)
+                }
+                Spacer(minLength: 0)
+            }
+            .id(row[0].url.path)
+            // A List draws its separator the full width of the row, which is the
+            // window — the very line the narrow column exists to avoid.
+            .alignmentGuide(.listRowSeparatorTrailing) { _ in contentWidth }
+        }
+    }
+
+    /// Rows are what the List can scroll to, so a track in the right column is
+    /// reached through the one beside it.
+    private func rowAnchor(_ path: String) -> String {
+        let groups = folderGroups.count <= 1 ? [tracks] : folderGroups.map(\.tracks)
+        for group in groups {
+            for row in rows(group) where row.contains(where: { $0.url.path == path }) {
+                return row[0].url.path
+            }
+        }
+        return path
+    }
+
     /// Reload the track list, following the album if a tag edit renamed it. The
     /// files themselves never move, so any one of their paths identifies the album
     /// afterwards.
@@ -130,7 +186,7 @@ struct MacAlbumDetailView: View {
         // The rows this scrolls to are the ones `tracks` just produced; give the
         // List a beat to lay them out before asking it to find one.
         try? await Task.sleep(for: .milliseconds(80))
-        withAnimation { proxy.scrollTo(focusPath, anchor: .center) }
+        withAnimation { proxy.scrollTo(rowAnchor(focusPath), anchor: .center) }
     }
 
     private func folderHeader(_ group: (folder: String, tracks: [Track])) -> some View {
@@ -171,9 +227,14 @@ struct MacAlbumDetailView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 18) {
-            ArtworkView(path: album.artworkPath, cornerRadius: 8)
-                .frame(width: 168, height: 168)
+            ArtworkView(path: album.artworkPath, cornerRadius: 8, maxPixel: 900)
+                .frame(width: 336, height: 336)
                 .shadow(radius: 6, y: 3)
+                .onTapGesture {
+                    guard let path = album.artworkPath else { return }
+                    openWindow(id: MacArtworkZoomView.windowID, value: path)
+                }
+                .help(album.artworkPath == nil ? "" : "Click to view full size")
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(album.title).font(.title2.bold())
