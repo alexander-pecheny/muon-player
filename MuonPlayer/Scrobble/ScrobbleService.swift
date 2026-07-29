@@ -41,8 +41,8 @@ final class ScrobbleService {
     init(database: Database, apiKey: String, apiSecret: String) {
         self.database = database
         self.hasAppKeys = !apiKey.isEmpty && !apiSecret.isEmpty
-        let storedKey = UserDefaults.standard.string(forKey: skKey)
-        let storedUser = UserDefaults.standard.string(forKey: userKey)
+        let storedKey = Prefs.string(forKey: skKey)
+        let storedUser = Prefs.string(forKey: userKey)
         self.client = LastFMClient(apiKey: apiKey, apiSecret: apiSecret, sessionKey: storedKey)
         self.username = storedKey != nil ? storedUser : nil
     }
@@ -77,8 +77,8 @@ final class ScrobbleService {
         defer { isBusy = false }
         do {
             let key = try await client.authenticate(username: username, password: password)
-            UserDefaults.standard.set(key, forKey: skKey)
-            UserDefaults.standard.set(username, forKey: userKey)
+            Prefs.set(key, forKey: skKey)
+            Prefs.set(username, forKey: userKey)
             self.username = username
             flush()
             return true
@@ -89,8 +89,8 @@ final class ScrobbleService {
     }
 
     func logOut() {
-        UserDefaults.standard.removeObject(forKey: skKey)
-        UserDefaults.standard.removeObject(forKey: userKey)
+        Prefs.removeObject(forKey: skKey)
+        Prefs.removeObject(forKey: userKey)
         username = nil
         Task { await client.setSessionKey(nil) }
     }

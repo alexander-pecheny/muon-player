@@ -13,7 +13,7 @@ enum GaplessFixMode: String, CaseIterable, Sendable {
     static let key = "gaplessFixMode"
 
     static var current: GaplessFixMode {
-        UserDefaults.standard.string(forKey: key).flatMap(GaplessFixMode.init) ?? .playbackOnly
+        Prefs.string(forKey: key).flatMap(GaplessFixMode.init) ?? .playbackOnly
     }
 
     var label: String {

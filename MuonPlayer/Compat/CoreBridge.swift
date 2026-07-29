@@ -89,13 +89,15 @@ public final class LibraryBridge {
         let root = LibraryRoot(url)
         out.append("root.path \(root.path)")
 
-        // Player (volume, repeat mode) and ScrobbleService (session key) also
-        // persist through UserDefaults, so whether it survives a relaunch matters
-        // beyond the library root.
-        let seen = UserDefaults.standard.string(forKey: "muon.defaultsProbe")
-        UserDefaults.standard.set("written", forKey: "muon.defaultsProbe")
-        out.append("userdefaults survived=\(seen != nil)")
-        out.append("saved root \(Self.loadRoot() ?? "-")")
+        // Everything the core persists — volume, repeat mode, the Last.fm session —
+        // goes through Prefs, so one round-trip answers for all of it. Raw
+        // UserDefaults is shown alongside because that is what silently loses it.
+        let prefsSeen = Prefs.string(forKey: "muon.probe") != nil
+        let defaultsSeen = UserDefaults.standard.string(forKey: "muon.probe") != nil
+        Prefs.set("x", forKey: "muon.probe")
+        UserDefaults.standard.set("x", forKey: "muon.probe")
+        out.append("persisted prefs=\(prefsSeen) userdefaults=\(defaultsSeen)")
+        out.append("saved root \(Prefs.string(forKey: Self.rootKey) ?? "-")")
 
         let files = FileScanner(roots: [url]).findAudioFiles()
         out.append("scanner \(files.count)")
@@ -119,40 +121,24 @@ public final class LibraryBridge {
         return out.joined(separator: "\n")
     }
 
+    private static let rootKey = "androidLibraryRoot"
+
     /// Point the library at a folder and index it. This is the app's real scan:
     /// FileScanner walks it, FFmpegMetadata reads every tag, and the rows land in
     /// SQLite, followed by the detached seam pass that measures gapless trims.
     public func openFolder(_ path: String) async {
         rootPath = path
-        Self.saveRoot(path)
+        Prefs.set(path, forKey: Self.rootKey)
         status = "Scanning…"
         await store.setRoots([LibraryRoot(URL(fileURLWithPath: path))])
         await publish(emptyMessage: "No albums found in \(path)")
-    }
-
-    /// The chosen folder is kept in a file rather than UserDefaults: on Android
-    /// that is corelibs Foundation's own implementation, and it did not survive a
-    /// relaunch here. It sits beside the library it describes.
-    private static var rootFile: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return support.appendingPathComponent("library-root.txt")
-    }
-
-    private static func saveRoot(_ path: String) {
-        try? path.write(to: rootFile, atomically: true, encoding: .utf8)
-    }
-
-    private static func loadRoot() -> String? {
-        guard let s = try? String(contentsOf: rootFile, encoding: .utf8) else { return nil }
-        let path = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.isEmpty ? nil : path
     }
 
     /// Bring back the library the app already indexed. The rows are in SQLite, so
     /// a relaunch should show them without re-reading every tag; the folder is
     /// rescanned only when the user asks.
     public func restore() async {
-        guard albums.isEmpty, let path = Self.loadRoot() else { return }
+        guard albums.isEmpty, let path = Prefs.string(forKey: Self.rootKey) else { return }
         rootPath = path
         store = LibraryStore(roots: [LibraryRoot(URL(fileURLWithPath: path))])
         await store.loadFromDatabase()

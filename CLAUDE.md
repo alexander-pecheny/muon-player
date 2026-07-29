@@ -256,13 +256,13 @@ back `content://` URLs and `FileScanner` walks a filesystem. So the picker brows
 real directories and the app asks for `READ_MEDIA_AUDIO`.
 
 **`UserDefaults` does not survive a relaunch on Android** — that is corelibs
-Foundation's own implementation, not Skip's, and `diagnose` reports it as
-`userdefaults survived=false`. The chosen library folder is therefore written to
-`Application Support/library-root.txt`. Everything else that persists through
-`UserDefaults` is silently *not* persisting: the player's volume and repeat mode,
-and — the one that matters — `ScrobbleService`'s Last.fm session key, so a login
-would not outlive the process. Those need the same treatment before scrobbling
-means anything here.
+Foundation's own implementation, not Skip's, and `synchronize()` does not help.
+Nothing errors; the value is simply gone next launch, which silently un-persisted
+the player's volume and repeat mode, the gapless fix mode, and the Last.fm session
+key. So the core reads and writes those through **`Library/Prefs.swift`**, which is
+`UserDefaults` on Apple and a JSON file in Application Support on Android. Use it
+for anything new that has to persist; `diagnose` prints
+`persisted prefs=true userdefaults=false` from inside one process if you doubt it.
 
 Still missing: a Media3 MediaSession (no lock-screen controls — `MUON_APPLE_UI`
 compiles the `MPNowPlayingInfoCenter` code out), artwork in the UI, and the rest of

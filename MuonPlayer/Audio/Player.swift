@@ -35,7 +35,7 @@ final class Player {
     var mode: PlaybackMode = .normal {
         didSet {
             guard mode != oldValue else { return }
-            UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+            Prefs.set(mode.rawValue, forKey: Self.modeKey)
             Task { await applyMode() }
         }
     }
@@ -46,7 +46,7 @@ final class Player {
     var volume: Float = 1 {
         didSet {
             engine.mainMixerNode.outputVolume = volume
-            UserDefaults.standard.set(volume, forKey: Self.volumeKey)
+            Prefs.set(volume, forKey: Self.volumeKey)
         }
     }
     private static let volumeKey = "outputVolume"
@@ -118,7 +118,7 @@ final class Player {
         // the defining class's own initializer does not fire `didSet`, so this
         // just seeds the initial value (loop flags are applied when playback
         // starts) without kicking off an applyMode() before the graph is ready.
-        if let raw = UserDefaults.standard.string(forKey: Self.modeKey),
+        if let raw = Prefs.string(forKey: Self.modeKey),
            let saved = PlaybackMode(rawValue: raw) {
             mode = saved
         }
@@ -130,7 +130,7 @@ final class Player {
     private func setupEngine() {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: CanonicalAudio.format)
-        if let saved = UserDefaults.standard.object(forKey: Self.volumeKey) as? Float {
+        if let saved = Prefs.float(forKey: Self.volumeKey) {
             volume = saved
         }
         engine.mainMixerNode.outputVolume = volume
