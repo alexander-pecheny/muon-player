@@ -268,6 +268,30 @@ Still missing: a Media3 MediaSession (no lock-screen controls — `MUON_APPLE_UI
 compiles the `MPNowPlayingInfoCenter` code out), artwork in the UI, and the rest of
 the iOS screens.
 
+### Shipping it
+
+`Android/fastlane` already has a `release` lane (`bundleRelease` +
+`upload_to_play_store`), so Play internal testing is the intended path — the
+Android analogue of `scripts/testflight.sh ios`. Three things are in the way:
+
+- **`gradle assembleRelease` does not work yet.** Skip's generated task hardcodes
+  `--arch automatic`, which in release fans out to aarch64 + armv7 + x86_64, while
+  `Package.swift` has one `-L` pointing at `Vendor/FFmpeg/android/arm64-v8a` — so
+  the x86_64 leg dies on `incompatible with elf_x86_64`. Fixing it means building
+  the other slices (`ANDROID_ABIS=all scripts/build-ffmpeg.sh android`) *and*
+  making the library path arch-aware, which SwiftPM cannot express with
+  `.when(platforms:)`; it needs an env var the per-arch build sets.
+- **It signs with the debug key.** `app/build.gradle.kts` falls back to it when
+  `Android/app/keystore.properties` is absent. Play rejects that.
+- **Size.** The debug APK is 229 MB because the generated packaging block sets
+  `keepDebugSymbols.add("**/*.so")` — 148 MB of that is unstripped native libs.
+  Stripping `libMuonSkip.so` alone takes it from 26 MB to 6.4 MB, so dropping that
+  line is the single biggest lever, at the cost of native crash symbolication.
+
+`abiFilters` is pinned to `arm64-v8a` in `defaultConfig.ndk`. Without it the
+package advertised the ABIs androidx ships, and a 32-bit or x86_64 device would
+install an app that dies in `dlopen` looking for `libMuonSkip.so`.
+
 ## Library maintenance
 
 `scripts/muon-dedup.swift` removes redundant copies of an album, keeping the

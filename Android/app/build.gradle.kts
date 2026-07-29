@@ -34,6 +34,14 @@ android {
     defaultConfig {
         minSdk = libs.versions.android.sdk.min.get().toInt()
         targetSdk = libs.versions.android.sdk.compile.get().toInt()
+        ndk {
+            // Vendor/FFmpeg/android and the Swift runtime are built for arm64-v8a
+            // only. Without this the package still advertises the ABIs androidx
+            // ships, and a 32-bit or x86_64 device installs an app that dies in
+            // dlopen looking for libMuonSkip.so. Add slices to
+            // scripts/build-ffmpeg.sh before widening this.
+            abiFilters += "arm64-v8a"
+        }
         // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
         // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
         // versionCode = CURRENT_PROJECT_VERSION
