@@ -35,6 +35,33 @@ public enum MuonCore {
             .map { metadataSummary(path: $0.path) }
     }
 
+    /// Playback, driven by the same Player the Apple apps use — the AAudio backend
+    /// in AVAudioEngineCompat is what it renders through here.
+    @MainActor
+    public static let playback = Playback()
+
+    @MainActor
+    public final class Playback {
+        private let player = Player()
+
+        public var isPlaying: Bool { player.isPlaying }
+        public var currentTime: Double { player.currentTime }
+        public var duration: Double { player.duration }
+        public var nowPlaying: String? { player.currentTrack?.title }
+
+        public func play(folder: String) {
+            let tracks = FileScanner(roots: [URL(fileURLWithPath: folder)])
+                .findAudioFiles()
+                .map { Track(url: $0) }
+            guard let first = tracks.first else { return }
+            player.play(track: first, context: tracks)
+        }
+
+        public func togglePlayPause() { player.togglePlayPause() }
+        public func next() { player.next() }
+        public func stop() { player.stop() }
+    }
+
     /// Read a file's tags through the shared FFmpeg metadata reader.
     public static func metadataSummary(path: String) -> String {
         let meta = FFmpegMetadata.read(url: URL(fileURLWithPath: path), includeArtwork: false)

@@ -9,6 +9,8 @@ import MuonCore
 struct CoreProbeView: View {
     @State var scanPath = NSTemporaryDirectory()
     @State var found: [String] = []
+    @State var playhead = "—"
+    @State var playing = false
 
     var body: some View {
         Form {
@@ -16,6 +18,10 @@ struct CoreProbeView: View {
                 LabeledContent("FFmpeg", value: ffmpegVersion)
                 LabeledContent("SQLite", value: sqliteVersion)
                 LabeledContent("Formats", value: "\(supportedExtensions.count)")
+            }
+            Section("Playback") {
+                Button(playLabel) { togglePlay() }
+                Text(playhead).foregroundStyle(.secondary)
             }
             Section("Scanner") {
                 TextField("Folder", text: $scanPath)
@@ -52,6 +58,30 @@ struct CoreProbeView: View {
         MuonCore.supportedExtensions
         #else
         []
+        #endif
+    }
+
+    private var playLabel: String { playing ? "Stop" : "Play folder" }
+
+    /// A ticking playhead is the proof that AAudio is really pulling decoded
+    /// frames: the position only advances when the callback consumes buffers.
+    private func togglePlay() {
+        #if os(Android)
+        if playing {
+            MuonCore.playback.stop()
+            playing = false
+            playhead = "—"
+            return
+        }
+        MuonCore.playback.play(folder: scanPath)
+        playing = true
+        Task {
+            while playing {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                let p = MuonCore.playback
+                playhead = "\(p.nowPlaying ?? "—")  \(Int(p.currentTime))s / \(Int(p.duration))s"
+            }
+        }
         #endif
     }
 

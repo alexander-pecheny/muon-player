@@ -8,6 +8,10 @@ options:
 settings:
   SWIFT_VERSION: "5.0"
   IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  # Marks the builds that compile MuonPlayer/Shared. The Android package builds the
+  # same Audio/Library sources without it, so the parts of Player that reach for
+  # PlatformImage, DominantColor and Color drop out there.
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) MUON_APPLE_UI"
   # Both Info.plists read these, so a TestFlight upload only needs
   # CURRENT_PROJECT_VERSION overridden on the xcodebuild command line.
   MARKETING_VERSION: "1.0"

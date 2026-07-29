@@ -1,7 +1,14 @@
+import Foundation
+#if canImport(AVFoundation)
 import AVFoundation
+#endif
+#if MUON_APPLE_UI
 import MediaPlayer
+#endif
 import Observation
+#if MUON_APPLE_UI
 import SwiftUI
+#endif
 
 /// Gapless audio player built on AVAudioEngine + a single AVAudioPlayerNode.
 ///
@@ -78,16 +85,20 @@ final class Player {
     private let node = AVAudioPlayerNode()
     private let feedQueue = DispatchQueue(label: "com.muonplayer.feed")
 
-    // Feeder state — only touched on feedQueue.
-    private var currentDecoder: FFmpegDecoder?
-    private var cumulativeScheduledFrames: AVAudioFramePosition = 0
-    private var pendingFrames: Int = 0
-    private var generation: Int = 0          // bumped on every discontinuity
-    private var noMoreAudio = false
+    // Feeder state — only touched on feedQueue, which is what `nonisolated(unsafe)`
+    // is asserting: the class is @MainActor, but these six are handed off to the
+    // feeder and the main actor must not touch them. `generation` is the exception
+    // it is designed around — the main actor bumps it to revoke an in-flight feed,
+    // and a torn read there can only make the feeder stop one buffer late.
+    nonisolated(unsafe) private var currentDecoder: FFmpegDecoder?
+    nonisolated(unsafe) private var cumulativeScheduledFrames: AVAudioFramePosition = 0
+    nonisolated(unsafe) private var pendingFrames: Int = 0
+    nonisolated(unsafe) private var generation: Int = 0   // bumped on every discontinuity
+    nonisolated(unsafe) private var noMoreAudio = false
     // Ramp the first few ms after a user-initiated start/seek up from silence, so
     // any engine/decoder startup transient (the occasional "white noise" blip)
     // is inaudible. Never set on gapless album transitions, so those stay seamless.
-    private var fadeInRemaining: Int = 0
+    nonisolated(unsafe) private var fadeInRemaining: Int = 0
     private static let fadeInFrames = Int(CanonicalAudio.sampleRate * 0.012) // 12ms
 
     private let segments = SegmentTable()
@@ -365,7 +376,7 @@ final class Player {
 
     // MARK: - Feeder (feedQueue)
 
-    private func openDecoder(for track: Track, offset: TimeInterval, generation gen: Int) {
+    nonisolated private func openDecoder(for track: Track, offset: TimeInterval, generation gen: Int) {
         do {
             let decoder = try FFmpegDecoder(url: track.url)
             if offset > 0 { decoder.seek(to: offset) }
@@ -383,7 +394,7 @@ final class Player {
     }
 
     /// Pull the next buffer, transparently crossing into the next track (gapless).
-    private func nextChunk(generation gen: Int) -> AVAudioPCMBuffer? {
+    nonisolated private func nextChunk(generation gen: Int) -> AVAudioPCMBuffer? {
         guard let decoder = currentDecoder else { return nil }
         if let buffer = decoder.nextBuffer() { return buffer }
 
@@ -398,7 +409,7 @@ final class Player {
         return currentDecoder?.nextBuffer()
     }
 
-    private func feedIfNeeded(generation gen: Int) {
+    nonisolated private func feedIfNeeded(generation gen: Int) {
         while pendingFrames < targetBufferedFrames {
             // Re-check on every iteration: a track switch (which bumps the
             // generation) must stop this feed immediately, or its remaining
@@ -427,7 +438,7 @@ final class Player {
 
     /// Linearly ramp gain 0→1 across the first `fadeInFrames` of output following
     /// a start/seek. Consumes `fadeInRemaining` as it goes.
-    private func applyFadeIn(to buffer: AVAudioPCMBuffer) {
+    nonisolated private func applyFadeIn(to buffer: AVAudioPCMBuffer) {
         guard let planes = buffer.floatChannelData else { return }
         let channels = Int(buffer.format.channelCount)
         let n = Int(buffer.frameLength)
@@ -554,6 +565,7 @@ final class Player {
 
     // MARK: - Artwork / Now Playing
 
+    #if MUON_APPLE_UI
     private(set) var currentArtwork: PlatformImage?
 
     /// A vivid accent derived from the current track's artwork (Spotify-style),
@@ -578,6 +590,11 @@ final class Player {
             }
         }
     }
+    #else
+    // Without the Apple UI layer the player holds no image and no accent colour;
+    // Android decodes artwork with BitmapFactory up in the view instead.
+    private func loadArtwork(for track: Track) {}
+    #endif
 
     // MARK: - Interruptions
 
@@ -636,6 +653,7 @@ final class Player {
     #endif
 
     private func setupRemoteCommands() {
+        #if MUON_APPLE_UI
         let center = MPRemoteCommandCenter.shared()
         center.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.resume() }; return .success }
         center.pauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.pause() }; return .success }
@@ -651,9 +669,11 @@ final class Player {
             Task { @MainActor in self?.seek(to: e.positionTime) }
             return .success
         }
+        #endif
     }
 
     private func updateNowPlayingInfo() {
+        #if MUON_APPLE_UI
         guard let track = currentTrack else { clearNowPlayingInfo(); return }
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: track.title,
@@ -673,17 +693,21 @@ final class Player {
         // that from the audio session, so this is Mac-only.
         MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
         #endif
+        #endif
     }
 
     private func clearNowPlayingInfo() {
+        #if MUON_APPLE_UI
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         #if os(macOS)
         MPNowPlayingInfoCenter.default().playbackState = .stopped
+        #endif
         #endif
     }
 
     // MARK: - Debug capture (records real mixer output for gapless verification)
 
+    #if MUON_APPLE_UI
     private var captureFile: AVAudioFile?
 
     func startCapture(to url: URL) {
@@ -704,4 +728,5 @@ final class Player {
         engine.mainMixerNode.removeTap(onBus: 0)
         captureFile = nil
     }
+    #endif
 }
