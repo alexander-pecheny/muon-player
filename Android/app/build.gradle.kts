@@ -18,13 +18,22 @@ kotlin {
 android {
     namespace = group as String
     compileSdk = libs.versions.android.sdk.compile.get().toInt()
+    // AGP strips native libraries with the NDK's llvm-strip, and silently packages
+    // them whole ("Unable to strip the following libraries") when it cannot find
+    // one. Any installed NDK will do — this is not the r27d the Swift SDK builds
+    // against, it only reads symbol tables.
+    ndkVersion = providers.environmentVariable("MUON_NDK_VERSION").getOrElse("29.0.14206865")
     compileOptions {
         sourceCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
         targetCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
     }
     packaging {
         jniLibs {
-            keepDebugSymbols.add("**/*.so")
+            // Skip's template keeps debug symbols in every .so, which was most of a
+            // 229 MB APK — the Swift runtime and FFmpeg carry a lot of them and
+            // nothing here reads them. Stripping is AGP's default; a native crash
+            // then needs the unstripped copy under .build to symbolicate, which is
+            // still on disk after a build.
             pickFirsts.add("**/*.so")
             // this option would compress JNI .so files and reduce overall size for Skip Fuse apps, but cost more at install time
             //useLegacyPackaging = true

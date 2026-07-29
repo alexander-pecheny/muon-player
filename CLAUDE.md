@@ -194,18 +194,22 @@ Compose, so the library, scanner, tag writer, decoder and gapless engine are the
 same code the Apple apps run — not a reimplementation.
 
 ```bash
+scripts/android-run.sh                                 # build, install, launch
+scripts/android-run.sh --music ~/Music_shared/Some/Album   # …and push an album
+
+# or by hand:
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export PATH="$HOME/.swiftly/bin:$PATH"
-
 swift build --target MuonCore --swift-sdk aarch64-unknown-linux-android28  # core only
-skip android build                                    # core + UI → libMuonSkip.so
-(cd Android && gradle assembleDebug)                  # → .build/Android/app/outputs/apk/debug
-
+skip android build                                     # core + UI → libMuonSkip.so
+(cd Android && gradle assembleDebug)                   # → .build/Android/app/outputs/apk/debug
 emulator -avd muon-test -no-window -no-audio -no-snapshot &
-adb install -r .build/Android/app/outputs/apk/debug/app-debug.apk
-adb shell pm grant me.pecheny.muonplayer android.permission.READ_MEDIA_AUDIO
-adb shell am start -n me.pecheny.muonplayer/muon.skip.MainActivity
 ```
+
+`android-run.sh` works the same for a phone over USB (Developer options → USB
+debugging, accept the RSA prompt) and for the emulator. It rescans MediaStore after
+pushing music, because a direct-path read of shared storage goes through
+MediaStore's view of the disk and `adb push` does not update it.
 
 The gapless machinery works: on a real library the seam pass measured 36 tracks,
 found a 17 ms gap at a *Somewhere City* transition and trimmed 725 samples, and
