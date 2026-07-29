@@ -206,6 +206,15 @@ skip android build                                     # core + UI → libMuonSk
 emulator -avd muon-test -no-window -no-audio -no-snapshot &
 ```
 
+An Android build leaves a Gradle daemon and a Kotlin compile daemon resident, both
+`-Xmx4g`, and the Kotlin one idles for two hours before it gives up. With an
+emulator alongside they are enough to make everything else on the machine feel
+slow, so after Android work:
+
+```bash
+gradle --stop && pkill -f KotlinCompileDaemon && adb emu kill
+```
+
 `android-run.sh` works the same for a phone over USB (Developer options → USB
 debugging, accept the RSA prompt) and for the emulator. It rescans MediaStore after
 pushing music, because a direct-path read of shared storage goes through
