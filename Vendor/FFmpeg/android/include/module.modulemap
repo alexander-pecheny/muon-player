@@ -1,0 +1,11 @@
+module CFFmpeg {
+    header "libavcodec/avcodec.h"
+    header "libavformat/avformat.h"
+    header "libavutil/avutil.h"
+    header "libavutil/opt.h"
+    header "libavutil/channel_layout.h"
+    header "libavutil/samplefmt.h"
+    header "libavutil/imgutils.h"
+    header "libswresample/swresample.h"
+    export *
+}

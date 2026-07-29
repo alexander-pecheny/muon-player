@@ -1,5 +1,12 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking   // URLSession lives here off-Darwin
+#endif
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto      // swift-crypto vends the same Insecure.MD5 off-Darwin
+#endif
 
 /// Minimal Last.fm 2.0 API client: mobile-session auth + now-playing + scrobble.
 /// All requests are signed (api_sig) and POSTed over HTTPS as the API requires.

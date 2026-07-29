@@ -1,4 +1,7 @@
+import Foundation
+#if canImport(AVFoundation)
 import AVFoundation
+#endif
 
 /// One track's span in the continuous scheduled sample stream.
 struct Segment {

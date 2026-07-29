@@ -1,4 +1,6 @@
+#if canImport(AVFoundation)
 import AVFoundation
+#endif
 import Foundation
 
 /// Generates and caches downsampled peak waveforms for tracks, off the main

@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(AVFoundation)
 import AVFoundation
+#endif
 import CFFmpeg
 
 /// Canonical output format everything is resampled to. A single, fixed format
@@ -25,7 +27,10 @@ enum FFErr {
         return -Int32(bitPattern: v)
     }
     static let eof: Int32 = tag("E", "O", "F", " ")
-    static let eagain: Int32 = -35 // AVERROR(EAGAIN); EAGAIN == 35 on Darwin
+    // AVERROR(EAGAIN) is -errno, and errno is not portable: EAGAIN is 35 on Darwin
+    // and 11 on Linux/Android. Hardcoding Darwin's value on Android would read
+    // "decoder wants more input" as an unrecognised error and truncate the track.
+    static let eagain: Int32 = -Int32(EAGAIN)
 
     static func string(_ code: Int32) -> String {
         var buf = [CChar](repeating: 0, count: 128)

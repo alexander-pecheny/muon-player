@@ -1,5 +1,10 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Network)
 import Network
+#endif
 import Observation
 
 /// Bridges playback events to Last.fm. Every eligible play is written to SQLite
