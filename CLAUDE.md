@@ -255,6 +255,15 @@ Storage is direct filesystem paths, not the Storage Access Framework: SAF hands
 back `content://` URLs and `FileScanner` walks a filesystem. So the picker browses
 real directories and the app asks for `READ_MEDIA_AUDIO`.
 
+**`UserDefaults` does not survive a relaunch on Android** — that is corelibs
+Foundation's own implementation, not Skip's, and `diagnose` reports it as
+`userdefaults survived=false`. The chosen library folder is therefore written to
+`Application Support/library-root.txt`. Everything else that persists through
+`UserDefaults` is silently *not* persisting: the player's volume and repeat mode,
+and — the one that matters — `ScrobbleService`'s Last.fm session key, so a login
+would not outlive the process. Those need the same treatment before scrobbling
+means anything here.
+
 Still missing: a Media3 MediaSession (no lock-screen controls — `MUON_APPLE_UI`
 compiles the `MPNowPlayingInfoCenter` code out), artwork in the UI, and the rest of
 the iOS screens.
