@@ -69,16 +69,15 @@ open class MainActivity: AppCompatActivity {
 
         AppDelegate.shared.onLaunch()
 
-        // Example of requesting permissions on startup.
-        // These must match the permissions in the AndroidManifest.xml file.
-        //let permissions = listOf(
-        //    Manifest.permission.ACCESS_COARSE_LOCATION,
-        //    Manifest.permission.ACCESS_FINE_LOCATION
-        //    Manifest.permission.CAMERA,
-        //    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        //)
-        //let requestTag = 1
-        //ActivityCompat.requestPermissions(self, permissions.toTypedArray(), requestTag)
+        // Reading the user's music folders needs this before the first scan, and the
+        // name of the permission changed in API 33.
+        val audioPermission = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        // kotlin.arrayOf, because `import skip.lib.*` shadows arrayOf with its own.
+        ActivityCompat.requestPermissions(this, kotlin.arrayOf(audioPermission), 1)
     }
 
     override fun onStart() {

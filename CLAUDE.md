@@ -185,6 +185,80 @@ string literals are readable in the shipped binary. The login self-test takes
 `MUON_LOGIN_TEST_USER`/`MUON_LOGIN_TEST_PASSWORD` from the environment for that
 reason.
 
+## Android
+
+A third app, built from the same `MuonPlayer/{Audio,Library,Models,Playback,Scanner,
+Scrobble}` sources. [Skip](https://skip.dev) compiles the Swift natively with the
+Swift 6.3 Android SDK and renders the SwiftUI in `Sources/MuonSkip` as Jetpack
+Compose, so the library, scanner, tag writer, decoder and gapless engine are the
+same code the Apple apps run — not a reimplementation.
+
+```bash
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+export PATH="$HOME/.swiftly/bin:$PATH"
+
+swift build --target MuonCore --swift-sdk aarch64-unknown-linux-android28  # core only
+skip android build                                    # core + UI → libMuonSkip.so
+(cd Android && gradle assembleDebug)                  # → .build/Android/app/outputs/apk/debug
+
+emulator -avd muon-test -no-window -no-audio -no-snapshot &
+adb install -r .build/Android/app/outputs/apk/debug/app-debug.apk
+adb shell pm grant me.pecheny.muonplayer android.permission.READ_MEDIA_AUDIO
+adb shell am start -n me.pecheny.muonplayer/muon.skip.MainActivity
+```
+
+The gapless machinery works: on a real library the seam pass measured 36 tracks,
+found a 17 ms gap at a *Somewhere City* transition and trimmed 725 samples, and
+playing across that seam keeps **one** AAudio stream open the whole way (grep
+logcat for `AAudioStreamBuilder_openStream` — more than one means it is not
+gapless any more).
+
+`MuonPlayer/Compat/` holds what Android has no answer for, all `#if os(Android)`:
+an `AVAudioEngine`/`AVAudioPlayerNode` pair backed by **AAudio** (the NDK's C API,
+so Swift reaches it the way it reaches FFmpeg, no JNI), the PCM buffer the decoder
+fills, `NWPathMonitor`, and `PlatformImage` — which on Android keeps artwork
+*encoded* so BitmapFactory can do the downsampling ImageIO does on Apple.
+`MUON_APPLE_UI` (set in `project.yml`, never by the package) gates the parts of
+`Player` that reach into `MuonPlayer/Shared`.
+
+Traps, each of which cost hours:
+
+- **Skip caches the staged `Package.swift`.** It copies the manifest into
+  `.build/plugins/outputs/.../src/main/swift/` and does not notice when yours
+  changes, so a manifest edit silently does nothing. After editing `Package.swift`:
+  `rm -rf .build/plugins .build/Android .build/aarch64-unknown-linux-android28`,
+  then `skip android build`, then gradle **twice** — the Kotlin bridge is emitted
+  by gradle's *iOS* pre-build, and until it exists `Main.kt` fails on
+  `Unresolved reference 'MuonSkipRootView'`.
+- **That pre-build uses Xcode's Swift, not swiftly's.** So the manifest must
+  type-check under both (it is written as plain statements for that reason), it
+  must *link* for iOS (hence the FFmpeg xcframeworks as binary targets), and you
+  must never run `swift build --triple arm64-apple-ios` with the swiftly toolchain
+  — it poisons `.build/arm64-apple-ios` with 6.3 modules Xcode's 6.2 cannot read.
+- **The SQLite amalgamation has no FTS5 unless asked.** `Vendor/SQLite/sqlite3-muon.c`
+  sets `SQLITE_ENABLE_FTS5` and includes `sqlite3.c`; the define lives in the source
+  because when it is missing nothing fails loudly — `CREATE VIRTUAL TABLE tracks_fts`
+  quietly does nothing, the triggers that write to it are still created, and then
+  every `INSERT INTO tracks` fails with `no such table: main.tracks_fts` and the
+  library just stays empty.
+- **`@State` cannot be `private`** in a view Skip bridges, and `import skip.lib.*`
+  in `Main.kt` shadows `arrayOf` (use `kotlin.arrayOf`).
+- A C target propagates its public header path to importers; a `systemLibrary`
+  does not. That is why `CFFmpeg` is a `.target` with a one-line `shim.c`.
+
+There is no console: `print` goes nowhere a device can show. `LibraryBridge.probe`
+and `.diagnose` walk the scan pipeline stage by stage and return the result *to the
+UI*, and `Database.selfTest()` reports why a write failed in SQLite's own words.
+Reach for those first.
+
+Storage is direct filesystem paths, not the Storage Access Framework: SAF hands
+back `content://` URLs and `FileScanner` walks a filesystem. So the picker browses
+real directories and the app asks for `READ_MEDIA_AUDIO`.
+
+Still missing: a Media3 MediaSession (no lock-screen controls — `MUON_APPLE_UI`
+compiles the `MPNowPlayingInfoCenter` code out), artwork in the UI, and the rest of
+the iOS screens.
+
 ## Library maintenance
 
 `scripts/muon-dedup.swift` removes redundant copies of an album, keeping the

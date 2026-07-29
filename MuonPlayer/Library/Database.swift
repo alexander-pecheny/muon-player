@@ -835,6 +835,31 @@ actor Database {
         }
     }
 
+    /// Why a write failed, in SQLite's own words. `prepare` and `step` only report
+    /// through `print`, which on Android goes nowhere a device can show.
+    func selfTest() -> String {
+        var out: [String] = []
+        out.append("open \(db != nil)")
+        out.append("fts5 \(sqlite3_compileoption_used("SQLITE_ENABLE_FTS5") == 1)")
+
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "CREATE VIRTUAL TABLE IF NOT EXISTS temp.ftscheck USING fts5(x)", -1, &stmt, nil)
+        out.append("fts prepare rc=\(rc) \(String(cString: sqlite3_errmsg(db)))")
+        if rc == SQLITE_OK { sqlite3_step(stmt); sqlite3_finalize(stmt) }
+
+        var probe: OpaquePointer?
+        let irc = sqlite3_prepare_v2(db, "INSERT INTO tracks (path, title, date_added) VALUES ('/selftest','t',0)", -1, &probe, nil)
+        if irc != SQLITE_OK {
+            out.append("insert prepare rc=\(irc) \(String(cString: sqlite3_errmsg(db)))")
+        } else {
+            let src = sqlite3_step(probe)
+            out.append("insert step rc=\(src) \(String(cString: sqlite3_errmsg(db)))")
+            sqlite3_finalize(probe)
+        }
+        exec("DELETE FROM tracks WHERE path='/selftest'")
+        return out.joined(separator: "\n")
+    }
+
     private func prepare(_ sql: String) -> OpaquePointer? {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {

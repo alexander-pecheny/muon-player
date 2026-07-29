@@ -74,8 +74,12 @@ var targets: [Target] = [
     .target(name: "CFFmpeg", path: "Vendor/FFmpeg/android",
             exclude: ["arm64-v8a"],
             sources: ["shim.c"], publicHeadersPath: "include"),
+    // sqlite3-muon.c is the only translation unit: it sets SQLITE_ENABLE_FTS5 and
+    // then includes the amalgamation. See the comment there for why the define
+    // lives in the source rather than here.
     .target(name: "CSQLite", path: "Vendor/SQLite",
-            sources: ["sqlite3.c"], publicHeadersPath: "include"),
+            exclude: ["sqlite3.c"],
+            sources: ["sqlite3-muon.c"], publicHeadersPath: "include"),
     .target(name: "CAAudio", path: "Vendor/AAudio",
             sources: ["shim.c"], publicHeadersPath: "include"),
 ]

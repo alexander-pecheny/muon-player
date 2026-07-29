@@ -1,11 +1,30 @@
-#if os(Android)
 import Foundation
+
+/// One album as the Android list needs it. `Album` itself is not public, and the
+/// index is what the view passes back to say "play this one".
+public struct AlbumItem: Identifiable, Sendable {
+    public let id: Int
+    public let title: String
+    public let artist: String
+    public let trackCount: Int
+    public let year: Int?
+    public let artworkPath: String?
+}
+
+public struct TrackItem: Identifiable, Sendable {
+    public let id: Int
+    public let title: String
+    public let duration: Double
+    public let codec: String
+}
+
+#if os(Android)
 import CFFmpeg
 import CSQLite
 
-/// What the Android UI can ask of the core today. Kept deliberately small: it
-/// exists to prove the Swift core, FFmpeg and SQLite all link into the APK and
-/// run on a device, and it grows into the real library API from here.
+/// What the Android UI can ask of the core. Everything below delegates to the same
+/// LibraryStore, Player and FFmpeg the Apple apps use; nothing here re-implements
+/// library behaviour, it only flattens it into values a SwiftUI view can hold.
 public enum MuonCore {
     public static var ffmpegVersion: String {
         let v = avcodec_version()
@@ -20,55 +39,151 @@ public enum MuonCore {
         AudioFormat.supportedExtensions.sorted()
     }
 
-    /// Scan a directory and report what the shared FileScanner made of it, so the
-    /// first thing exercised on Android is real library code and not a stub.
-    public static func scan(path: String) -> [String] {
-        FileScanner(roots: [URL(fileURLWithPath: path)])
-            .findAudioFiles()
-            .map { $0.lastPathComponent }
+    @MainActor
+    public static let library = LibraryBridge()
+}
+
+@MainActor
+public final class LibraryBridge {
+    private var store = LibraryStore(roots: [])
+    private var player = Player()
+    private var albums: [Album] = []
+    private var albumTracks: [Track] = []
+
+    public private(set) var rootPath: String = ""
+    public private(set) var status: String = "No folder chosen"
+
+    // MARK: - Folders
+
+    /// The directories under `path`, so the picker can walk the device without the
+    /// Storage Access Framework — which would hand back content:// URLs that
+    /// FileScanner, being FileManager-based, cannot walk.
+    public nonisolated func subfolders(of path: String) -> [String] {
+        let url = URL(fileURLWithPath: path)
+        let items = (try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
+        return items
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .map { $0.path }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    /// Every audio file under `path`, described by its tags rather than its name.
-    public static func scanWithTags(path: String) -> [String] {
-        FileScanner(roots: [URL(fileURLWithPath: path)])
-            .findAudioFiles()
-            .map { metadataSummary(path: $0.path) }
+    /// What the shared FileScanner sees under `path`, and whether the first file
+    /// can actually be opened. Shared storage hands out directory listings freely
+    /// and then refuses the reads, so "found" and "readable" are separate answers.
+    public nonisolated func probe(_ path: String) -> String {
+        let files = FileScanner(roots: [URL(fileURLWithPath: path)]).findAudioFiles()
+        guard let first = files.first else { return "0 audio files" }
+        let readable = FileManager.default.isReadableFile(atPath: first.path)
+        let opened = (try? FileHandle(forReadingFrom: first)) != nil
+        return "\(files.count) files · readable \(readable) · open \(opened)"
     }
 
-    /// Playback, driven by the same Player the Apple apps use — the AAudio backend
-    /// in AVAudioEngineCompat is what it renders through here.
-    @MainActor
-    public static let playback = Playback()
+    /// Walk the same pipeline the scan does, one stage at a time, and report where
+    /// it stops. The scan is several awaits deep behind a detached task, so a stage
+    /// that silently yields nothing is otherwise indistinguishable from an empty
+    /// folder.
+    public func diagnose(_ path: String) async -> String {
+        var out: [String] = []
+        let url = URL(fileURLWithPath: path)
+        let root = LibraryRoot(url)
+        out.append("root.path \(root.path)")
 
-    @MainActor
-    public final class Playback {
-        private let player = Player()
+        let files = FileScanner(roots: [url]).findAudioFiles()
+        out.append("scanner \(files.count)")
+        guard let first = files.first else { return out.joined(separator: "\n") }
 
-        public var isPlaying: Bool { player.isPlaying }
-        public var currentTime: Double { player.currentTime }
-        public var duration: Double { player.duration }
-        public var nowPlaying: String? { player.currentTrack?.title }
+        let meta = FFmpegMetadata.read(url: first, includeArtwork: false)
+        out.append("tags \(meta.artist ?? "-") / \(meta.album ?? "-") / \(meta.title ?? "-")")
 
-        public func play(folder: String) {
-            let tracks = FileScanner(roots: [URL(fileURLWithPath: folder)])
-                .findAudioFiles()
-                .map { Track(url: $0) }
-            guard let first = tracks.first else { return }
-            player.play(track: first, context: tracks)
+        let detached = await Task.detached(priority: .utility) { files.count }.value
+        out.append("detached \(detached)")
+
+        let known = await store.database.knownPathsWithMtime()
+        out.append("known \(known.count)")
+
+        let id = await store.database.upsertTrack(path: first.path, meta: meta,
+                                                  hasArtwork: false, mtime: 1)
+        out.append("upsert \(id.map(String.init) ?? "nil")")
+        out.append(await store.database.selfTest())
+        out.append("rows \(await store.database.trackCount())")
+        out.append("albums \(await store.database.albums().count)")
+        return out.joined(separator: "\n")
+    }
+
+    /// Point the library at a folder and index it. This is the app's real scan:
+    /// FileScanner walks it, FFmpegMetadata reads every tag, and the rows land in
+    /// SQLite, followed by the detached seam pass that measures gapless trims.
+    public func openFolder(_ path: String) async {
+        rootPath = path
+        UserDefaults.standard.set(path, forKey: Self.rootKey)
+        status = "Scanning…"
+        await store.setRoots([LibraryRoot(URL(fileURLWithPath: path))])
+        await publish(emptyMessage: "No albums found in \(path)")
+    }
+
+    private static let rootKey = "androidLibraryRoot"
+
+    /// Bring back the library the app already indexed. The rows are in SQLite, so
+    /// a relaunch should show them without re-reading every tag; the folder is
+    /// rescanned only when the user asks.
+    public func restore() async {
+        guard albums.isEmpty, let path = UserDefaults.standard.string(forKey: Self.rootKey) else { return }
+        rootPath = path
+        store = LibraryStore(roots: [LibraryRoot(URL(fileURLWithPath: path))])
+        await store.loadFromDatabase()
+        await publish(emptyMessage: "No albums indexed yet")
+    }
+
+    private func publish(emptyMessage: String) async {
+        albums = store.albums
+        status = albums.isEmpty
+            ? emptyMessage
+            : "\(albums.count) albums, \(await store.allTracks().count) tracks"
+    }
+
+    public var scanStatus: String {
+        if case .idle = store.scanPhase { return status }
+        return store.scanPhase.label
+    }
+
+    public var albumRows: [AlbumItem] {
+        albums.enumerated().map { i, a in
+            AlbumItem(id: i, title: a.title, artist: a.artist,
+                     trackCount: a.trackCount, year: a.year, artworkPath: a.artworkPath)
         }
-
-        public func togglePlayPause() { player.togglePlayPause() }
-        public func next() { player.next() }
-        public func stop() { player.stop() }
     }
 
-    /// Read a file's tags through the shared FFmpeg metadata reader.
-    public static func metadataSummary(path: String) -> String {
-        let meta = FFmpegMetadata.read(url: URL(fileURLWithPath: path), includeArtwork: false)
-        let title = meta.title ?? URL(fileURLWithPath: path).lastPathComponent
-        let artist = meta.artist ?? "Unknown artist"
-        let seconds = meta.duration.map { String(format: "%.1fs", $0) } ?? "?"
-        return "\(artist) — \(title) (\(seconds))"
+    // MARK: - Playback
+
+    public func openAlbum(_ index: Int) async -> [TrackItem] {
+        guard albums.indices.contains(index) else { return [] }
+        albumTracks = await store.tracks(in: albums[index])
+        return albumTracks.enumerated().map { i, t in
+            TrackItem(id: i, title: t.title, duration: t.duration ?? 0, codec: t.format.rawValue)
+        }
+    }
+
+    public func play(trackAt index: Int) {
+        guard albumTracks.indices.contains(index) else { return }
+        player.play(track: albumTracks[index], context: albumTracks)
+    }
+
+    public func togglePlayPause() { player.togglePlayPause() }
+    public func next() { player.next() }
+    public func previous() { player.previous() }
+    public func stop() { player.stop() }
+
+    public var isPlaying: Bool { player.isPlaying }
+    public var currentTitle: String { player.currentTrack?.title ?? "" }
+    public var currentArtist: String { player.currentTrack?.displayArtist ?? "" }
+    public var currentTime: Double { player.currentTime }
+    public var duration: Double { player.duration }
+
+    /// Embedded cover bytes for a track path, decoded by the view with
+    /// BitmapFactory — see PlatformImage in ImageCompat.
+    public nonisolated func artworkData(forPath path: String) -> Data? {
+        FFmpegMetadata.read(url: URL(fileURLWithPath: path), includeArtwork: true).artwork
     }
 }
 #endif
