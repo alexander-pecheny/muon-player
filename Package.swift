@@ -22,7 +22,6 @@ import PackageDescription
 import Foundation
 
 let ffmpegLibs = ["avcodec", "avformat", "avutil", "swresample"]
-let ffmpegLibDir = Context.packageDirectory + "/Vendor/FFmpeg/android/arm64-v8a"
 
 // Everything under MuonPlayer/ that belongs to the Apple apps only. Listing it
 // keeps SwiftPM from warning about files it can see but never builds.
@@ -32,8 +31,7 @@ let appleOnly = ["Info.plist", "PrivacyInfo.xcprivacy", "Secrets.swift",
 let apple: [Platform] = [.iOS, .macOS]
 
 // Skip pre-builds the package for iOS to generate its Kotlin bridge, and that step
-// links, so the Apple slices have to be reachable from here too — the -L below
-// only points at the Android ones.
+// links, so the Apple slices have to be reachable from here too.
 var ffmpegBinaryTargets: [Target] = []
 var ffmpegAppleDeps: [Target.Dependency] = []
 for lib in ffmpegLibs {
@@ -48,9 +46,12 @@ coreDeps.append(.product(name: "Crypto", package: "swift-crypto",
                          condition: .when(platforms: [.android])))
 coreDeps += ffmpegAppleDeps
 
-var coreLinks: [LinkerSetting] = [
-    .unsafeFlags(["-L" + ffmpegLibDir], .when(platforms: [.android])),
-]
+// No -L for the Android FFmpeg: linkerSettings condition on platform, not
+// architecture, and a release build compiles every ABI, so one path would feed
+// arm64 archives to the x86_64 link. `scripts/build-ffmpeg.sh android` instead
+// registers each slice against its target triple with `swift sdk configure
+// --library-search-path`, which is per-triple.
+var coreLinks: [LinkerSetting] = []
 for lib in ffmpegLibs + ["aaudio"] {
     coreLinks.append(.linkedLibrary(lib, .when(platforms: [.android])))
 }
@@ -72,7 +73,7 @@ var targets: [Target] = [
     // header path to modules that import it, and avcodec.h pulls in
     // <libavutil/samplefmt.h> by path.
     .target(name: "CFFmpeg", path: "Vendor/FFmpeg/android",
-            exclude: ["arm64-v8a"],
+            exclude: ["arm64-v8a", "x86_64", "armeabi-v7a"],
             sources: ["shim.c"], publicHeadersPath: "include"),
     // sqlite3-muon.c is the only translation unit: it sets SQLITE_ENABLE_FTS5 and
     // then includes the amalgamation. See the comment there for why the define

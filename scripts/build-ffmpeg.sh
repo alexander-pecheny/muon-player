@@ -25,6 +25,7 @@ FFMPEG_TAG="release/7.1"
 MINVER=17.0
 MACMINVER=14.0
 ANDROID_API=28
+SWIFT_ANDROID_SDK="${SWIFT_ANDROID_SDK:-swift-6.3.3-RELEASE_android}"
 
 LIBS="libavcodec libavformat libavutil libswresample"
 
@@ -88,6 +89,11 @@ build_slice () {
 
 # The NDK that ships inside the Swift Android SDK, so FFmpeg and the Swift code
 # that links it are built against one sysroot.
+# The sysroot the Swift Android SDK links against, which is not the NDK's own copy.
+android_ndk_sysroot () {
+  echo "$HOME/Library/org.swift.swiftpm/swift-sdks/${SWIFT_ANDROID_SDK}.artifactbundle/swift-android/ndk-sysroot"
+}
+
 android_ndk () {
   local bundle="$HOME/Library/org.swift.swiftpm/swift-sdks/swift-6.3.3-RELEASE_android.artifactbundle/swift-android"
   if [ -n "${ANDROID_NDK_HOME:-}" ]; then echo "$ANDROID_NDK_HOME"; return; fi
@@ -170,21 +176,51 @@ build_apple () {
   write_modulemap "$OUT/include"
 }
 
+# abi | ffmpeg --arch | clang triple prefix | swift target triple.
+#
+# All three are built even though the APK ships arm64-v8a only (see abiFilters):
+# Skip's gradle task runs `skip android build --arch automatic`, which in a release
+# build compiles every architecture, and a leg with no FFmpeg to link against fails
+# the whole build.
+ANDROID_SLICES=(
+  "arm64-v8a|aarch64|aarch64-linux-android|aarch64-linux-android"
+  "x86_64|x86_64|x86_64-linux-android|x86_64-linux-android"
+  "armeabi-v7a|arm|armv7a-linux-androideabi|arm-linux-androideabi"
+)
+
 build_android () {
-  # Apple Silicon runs the arm64-v8a emulator image, so one ABI covers both the
-  # emulator and a real phone. x86_64 is only needed for an Intel host.
-  build_android_slice arm64-v8a aarch64 aarch64-linux-android
-  [ "${ANDROID_ABIS:-}" = "all" ] && build_android_slice x86_64 x86_64 x86_64-linux-android
+  for slice in "${ANDROID_SLICES[@]}"; do
+    IFS='|' read -r abi arch triple _ <<< "$slice"
+    build_android_slice "$abi" "$arch" "$triple"
+  done
 
   echo ">>> staging android libs + headers"
-  for abi in arm64-v8a $([ "${ANDROID_ABIS:-}" = "all" ] && echo x86_64); do
-    rm -rf "$OUT/android/$abi"
+  for slice in "${ANDROID_SLICES[@]}"; do
+    IFS='|' read -r abi _ _ _ <<< "$slice"
+    rm -rf "${OUT:?}/android/$abi"
     mkdir -p "$OUT/android/$abi"
     for lib in $LIBS; do cp "$WORK/android-$abi/lib/${lib}.a" "$OUT/android/$abi/"; done
   done
   rm -rf "$OUT/android/include"
   cp -R "$WORK/android-arm64-v8a/include" "$OUT/android/include"
   write_modulemap "$OUT/android/include"
+
+  # Install each slice into the NDK sysroot's own per-triple lib directory.
+  #
+  # Package.swift cannot choose a library path per architecture — linkerSettings
+  # condition on platform, and a release build compiles every ABI, so one -L would
+  # feed arm64 archives to the x86_64 link. `swift sdk configure
+  # --library-search-path` looked like the answer but is keyed to the SDK id, and
+  # Skip invokes swift build with a bare target triple, so it is never consulted.
+  # These directories, on the other hand, are already on the link line the compiler
+  # builds for each triple, which is the whole point of a sysroot.
+  local sysroot="$(android_ndk_sysroot)"
+  echo ">>> installing into $sysroot"
+  for slice in "${ANDROID_SLICES[@]}"; do
+    IFS='|' read -r abi _ _ sysdir <<< "$slice"
+    for lib in $LIBS; do cp "$WORK/android-$abi/lib/${lib}.a" "$sysroot/usr/lib/$sysdir/"; done
+    echo "    $sysdir ← $abi"
+  done
 }
 
 mkdir -p "$OUT"
