@@ -36,10 +36,30 @@ def build(configuration: str, clean: bool) -> None:
 
 
 def product(configuration: str) -> Path:
-    pattern = f"Library/Developer/Xcode/DerivedData/MuonPlayer-*/Build/Products/{configuration}/{SCHEME}.app"
-    apps = list(Path.home().glob(pattern))
+    """The app this checkout just built.
+
+    Every checkout of the repo — a git worktree, a second clone — gets its own
+    DerivedData directory, and they all match `MuonPlayer-*`. Picking the newest
+    app across them launches whichever copy was built last, which can quietly be
+    another branch's binary. Each directory records the project it belongs to, so
+    match on that instead.
+    """
+    root = Path.home() / "Library/Developer/Xcode/DerivedData"
+    apps = []
+    for dd in root.glob("MuonPlayer-*"):
+        info = dd / "info.plist"
+        try:
+            owner = subprocess.run(["/usr/libexec/PlistBuddy", "-c", "Print :WorkspacePath",
+                                    str(info)], capture_output=True, text=True).stdout.strip()
+        except OSError:
+            continue
+        if Path(owner) != PROJECT:
+            continue
+        app = dd / "Build/Products" / configuration / f"{SCHEME}.app"
+        if app.exists():
+            apps.append(app)
     if not apps:
-        sys.exit(f"built app not found under DerivedData ({configuration})")
+        sys.exit(f"built app not found under DerivedData for {PROJECT} ({configuration})")
     return max(apps, key=lambda p: p.stat().st_mtime)
 
 
