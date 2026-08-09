@@ -39,7 +39,7 @@ struct FoldersView: View {
                 Section {
                     ForEach(shownTracks) { track in
                         TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url)
-                            .contentShape(Rectangle())
+                            .tappableRow()
                             .onTapGesture { player.play(track: track, context: trackFiles) }
                             .swipeActions(edge: .trailing) {
                                 Button {
@@ -57,7 +57,7 @@ struct FoldersView: View {
             }
         }
         .listStyle(.plain)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter this folder")
+        .filterSearchable(text: $query, prompt: "Filter this folder")
         .navigationTitle(directory == nil ? "Folders" : dir.lastPathComponent)
         .navigationBarTitleDisplayMode(directory == nil ? .large : .inline)
         .overlay {

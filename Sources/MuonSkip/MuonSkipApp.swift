@@ -1,22 +1,22 @@
 import Foundation
 import SkipFuse
 import SwiftUI
+import MuonCore
 
 /// A logger for the MuonSkip module.
 let logger: Logger = Logger(subsystem: "me.pecheny.muonplayer", category: "MuonSkip")
 
-/// The shared top-level view for the app, loaded from the platform-specific App delegates below.
+/// The shared top-level view for the app, bridged to Kotlin as the activity's content.
 ///
-/// The default implementation merely loads the `ContentView` for the app and logs a message.
+/// It shows `MuonCore.RootView` — the same screens the iOS app runs, over the same
+/// object graph. The Android-only diagnostic harness that used to live here is now
+/// reachable from Settings instead of owning the root.
 /* SKIP @bridge */public struct MuonSkipRootView : View {
     /* SKIP @bridge */public init() {
     }
 
     public var body: some View {
-        ContentView()
-            .task {
-                logger.info("Skip app logs are viewable in the Xcode console for iOS; Android logs can be viewed in Studio or using adb logcat")
-            }
+        RootView()
     }
 }
 

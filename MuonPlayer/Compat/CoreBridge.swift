@@ -18,6 +18,13 @@ public struct TrackItem: Identifiable, Sendable {
     public let codec: String
 }
 
+/// Where the Android folder picker records the root it indexed. Declared outside
+/// the guard below because RootView reads it back at launch, and RootView also has
+/// to compile in the iOS scaffolding build Skip runs first.
+enum AndroidLibrary {
+    static let rootKey = "androidLibraryRoot"
+}
+
 #if os(Android)
 import CFFmpeg
 import CSQLite
@@ -97,7 +104,7 @@ public final class LibraryBridge {
         Prefs.set("x", forKey: "muon.probe")
         UserDefaults.standard.set("x", forKey: "muon.probe")
         out.append("persisted prefs=\(prefsSeen) userdefaults=\(defaultsSeen)")
-        out.append("saved root \(Prefs.string(forKey: Self.rootKey) ?? "-")")
+        out.append("saved root \(Prefs.string(forKey: AndroidLibrary.rootKey) ?? "-")")
 
         let files = FileScanner(roots: [url]).findAudioFiles()
         out.append("scanner \(files.count)")
@@ -121,14 +128,12 @@ public final class LibraryBridge {
         return out.joined(separator: "\n")
     }
 
-    private static let rootKey = "androidLibraryRoot"
-
     /// Point the library at a folder and index it. This is the app's real scan:
     /// FileScanner walks it, FFmpegMetadata reads every tag, and the rows land in
     /// SQLite, followed by the detached seam pass that measures gapless trims.
     public func openFolder(_ path: String) async {
         rootPath = path
-        Prefs.set(path, forKey: Self.rootKey)
+        Prefs.set(path, forKey: AndroidLibrary.rootKey)
         status = "Scanning…"
         await store.setRoots([LibraryRoot(URL(fileURLWithPath: path))])
         await publish(emptyMessage: "No albums found in \(path)")
@@ -138,7 +143,7 @@ public final class LibraryBridge {
     /// a relaunch should show them without re-reading every tag; the folder is
     /// rescanned only when the user asks.
     public func restore() async {
-        guard albums.isEmpty, let path = Prefs.string(forKey: Self.rootKey) else { return }
+        guard albums.isEmpty, let path = Prefs.string(forKey: AndroidLibrary.rootKey) else { return }
         rootPath = path
         store = LibraryStore(roots: [LibraryRoot(URL(fileURLWithPath: path))])
         await store.loadFromDatabase()

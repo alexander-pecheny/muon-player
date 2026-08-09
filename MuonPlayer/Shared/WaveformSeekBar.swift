@@ -45,7 +45,7 @@ struct WaveformSeekBar: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .tappableRow()
             .modifier(SeekGesture(enabled: interactive, width: geo.size.width,
                                   dragFraction: $dragFraction, onScrub: onScrub, onCommit: onCommit))
             .animation(.linear(duration: 0.12), value: shown)

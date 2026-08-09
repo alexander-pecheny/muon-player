@@ -1,9 +1,11 @@
 import SwiftUI
+#if canImport(CoreGraphics)
 import CoreGraphics
+#endif
 
 #if canImport(UIKit)
 import UIKit
-#else
+#elseif canImport(AppKit)
 import AppKit
 #endif
 
@@ -24,6 +26,7 @@ extension Color {
         Color.gray
         #endif
     }
+
 }
 
 private struct ArtworkAccentKey: EnvironmentKey {
@@ -89,8 +92,7 @@ enum DominantColor {
     /// The image's dominant hues, most prominent first. More than one, because
     /// the most prominent hue is often the one that cannot be made legible.
     static func candidates(from image: PlatformImage, limit: Int = 5) -> [RGB] {
-        guard let cg = cgImage(from: image),
-              let px = downsampledPixels(cg, side: 48) else { return [] }
+        guard let px = downsampledPixels(from: image, side: 48) else { return [] }
 
         let bins = 24
         var weight = [Double](repeating: 0, count: bins)
@@ -184,17 +186,21 @@ enum DominantColor {
         return dr * dr + dg * dg + db * db
     }
 
-    private static func cgImage(from image: PlatformImage) -> CGImage? {
+    /// Draw into a small RGBA8 buffer and return the raw bytes.
+    ///
+    /// Android has no pixel reader here yet: skip-fuse-ui's UIImage exposes
+    /// `cgImage` only as an unavailable `Any?`, so getting at the samples means
+    /// going through android.graphics.Bitmap on the Android bridge. Until then it
+    /// returns nil, which every caller already handles by falling back to
+    /// `neutralAccent` — the tint is grey there rather than wrong.
+    static func downsampledPixels(from image: PlatformImage, side: Int) -> [UInt8]? {
+        #if canImport(CoreGraphics)
         #if canImport(UIKit)
-        return image.cgImage
+        guard let cg = image.cgImage else { return nil }
         #else
         var rect = CGRect(origin: .zero, size: image.size)
-        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
         #endif
-    }
-
-    /// Draw into a small RGBA8 buffer and return the raw bytes.
-    private static func downsampledPixels(_ cg: CGImage, side: Int) -> [UInt8]? {
         var data = [UInt8](repeating: 0, count: side * side * 4)
         guard let ctx = CGContext(data: &data, width: side, height: side,
                                   bitsPerComponent: 8, bytesPerRow: side * 4,
@@ -204,6 +210,9 @@ enum DominantColor {
         ctx.interpolationQuality = .low
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
         return data
+        #else
+        return nil
+        #endif
     }
 
     /// RGB (0...1) → HSB (0...1), matching UIColor's channel conventions.
@@ -244,10 +253,15 @@ extension Color {
         self.init(uiColor: UIColor { traits in
             UIColor(traits.userInterfaceStyle == .dark ? dark : light)
         })
-        #else
+        #elseif canImport(AppKit)
         self.init(nsColor: NSColor(name: nil) { appearance in
             NSColor(appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light)
         })
+        #else
+        // Android has no appearance-resolving colour, so one variant has to be
+        // picked up front. Moot until DominantColor can read pixels there — with no
+        // candidates it never gets this far, and the accent stays neutralAccent.
+        self.init(red: dark.r, green: dark.g, blue: dark.b)
         #endif
     }
 }
@@ -258,7 +272,7 @@ private extension UIColor {
         self.init(red: c.r, green: c.g, blue: c.b, alpha: 1)
     }
 }
-#else
+#elseif canImport(AppKit)
 private extension NSColor {
     convenience init(_ c: DominantColor.RGB) {
         self.init(srgbRed: c.r, green: c.g, blue: c.b, alpha: 1)

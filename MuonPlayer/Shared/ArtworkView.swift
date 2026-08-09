@@ -71,13 +71,19 @@ struct ArtworkView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .contentShape(Rectangle())
+            .tappableRow()
             .task(id: path) { await load() }
     }
 
     private var placeholder: some View {
         ZStack {
+            // SkipSwiftUI's hierarchical styles stop at .secondary, so Android
+            // draws the placeholder's fill as a faint grey by hand.
+            #if os(Android)
+            Rectangle().fill(Color.gray.opacity(0.25))
+            #else
             Rectangle().fill(.quaternary)
+            #endif
             Image(systemName: "music.note")
                 .font(.system(size: 24))
                 .foregroundStyle(.secondary)

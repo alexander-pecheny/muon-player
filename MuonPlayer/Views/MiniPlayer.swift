@@ -37,7 +37,7 @@ struct MiniPlayer: View {
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) { Divider() }
-        .contentShape(Rectangle())
+        .tappableRow()
         .onTapGesture(perform: onTap)
     }
 }

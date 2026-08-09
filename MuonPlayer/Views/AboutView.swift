@@ -73,7 +73,7 @@ struct LicenseTextView: View {
                 }
                 Text(text)
                     .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
+                    .selectableText()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()

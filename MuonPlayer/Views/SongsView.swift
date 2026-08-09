@@ -19,7 +19,7 @@ struct SongsView: View {
         List {
             ForEach(filtered) { track in
                 TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url)
-                    .contentShape(Rectangle())
+                    .tappableRow()
                     .onTapGesture { player.play(track: track, context: filtered) }
                     .swipeActions(edge: .trailing) {
                         Button {
@@ -31,7 +31,7 @@ struct SongsView: View {
             }
         }
         .listStyle(.plain)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter songs")
+        .filterSearchable(text: $query, prompt: "Filter songs")
         .overlay {
             if tracks.isEmpty {
                 ContentUnavailableView("No Songs", systemImage: "music.note")

@@ -46,9 +46,9 @@ struct AlbumDetailView: View {
                         }
                         .buttonStyle(.plain)
                         Text(trackCountLine)
-                            .font(.caption).foregroundStyle(.tertiary)
+                            .font(.caption).tertiaryForeground()
                         if let fmt = formatSummary {
-                            Text(fmt).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                            Text(fmt).font(.caption.tabularDigits).tertiaryForeground()
                         }
                     }
 
@@ -74,7 +74,7 @@ struct AlbumDetailView: View {
                     .padding(.horizontal)
                 }
                 .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets())
+                .flushListRow()
                 .listRowBackground(Color.clear)
                 // The Play/Queue buttons already divide header from tracklist.
                 .listRowSeparator(.hidden)
@@ -85,7 +85,7 @@ struct AlbumDetailView: View {
                     TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url,
                              hideArtist: artistMatchesAlbum(track), accent: albumAccent)
                         .id(track.url.path)
-                        .contentShape(Rectangle())
+                        .tappableRow()
                         .onTapGesture { player.play(track: track, context: tracks) }
                         .swipeActions(edge: .trailing) {
                             Button {
@@ -223,7 +223,7 @@ struct TrackRow: View {
         HStack(spacing: 12) {
             if let n = track.trackNo {
                 Text("\(n)")
-                    .font(.footnote.monospacedDigit())
+                    .font(.footnote.tabularDigits)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
@@ -243,7 +243,7 @@ struct TrackRow: View {
                 Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(accent)
             }
             if let d = track.duration {
-                Text(formatDuration(d)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text(formatDuration(d)).font(.caption.tabularDigits).foregroundStyle(.secondary)
             }
         }
     }

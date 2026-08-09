@@ -124,7 +124,7 @@ struct HomeView: View {
                 Section("Songs") {
                     ForEach(results.songs) { track in
                         TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url)
-                            .contentShape(Rectangle())
+                            .tappableRow()
                             .onTapGesture { player.play(track: track, context: results.songs) }
                             .swipeActions(edge: .trailing) {
                                 Button {

@@ -34,6 +34,12 @@ struct ContentView: View {
     // navigation live in the external `router` (@Observable), so the TabView
     // rebuild when the accessory first appears re-reads them and nothing resets.
     @ViewBuilder private var content: some View {
+        #if os(Android)
+        // Android has neither tabViewBottomAccessory nor safeAreaInset, so the mini
+        // player is drawn as a bottom overlay *inside* the tab content instead —
+        // which is what keeps it above the tab bar rather than beneath it.
+        tabs
+        #else
         if #available(iOS 26.0, *) {
             if player.currentTrack != nil {
                 tabs.tabViewBottomAccessory {
@@ -49,13 +55,14 @@ struct ContentView: View {
                 }
             }
         }
+        #endif
     }
 
     private var tabs: some View {
         @Bindable var router = router
         return TabView(selection: $router.selection) {
             ForEach(visibleTabs) { tab in
-                TabNavStack(tab: tab)
+                TabNavStack(tab: tab, onTapMini: { showNowPlaying = true })
                     .tabItem { Label(tab.title, systemImage: tab.systemImage) }
                     .tag(TabSelection.tab(tab))
             }
@@ -77,12 +84,13 @@ struct ContentView: View {
 /// and also collapses the folder browser's per-level duplicate registration.
 private struct TabNavStack: View {
     let tab: AppTab
+    var onTapMini: () -> Void = {}
     @Environment(TabRouter.self) private var router
 
     var body: some View {
         let path = router.path(for: .tab(tab))
         NavigationStack(path: path) {
-            TabRootView(tab: tab)
+            TabRootView(tab: tab, onTapMini: onTapMini)
                 .modifier(CommonDestinations())
         }
         .environment(\.navPath, path)
@@ -117,13 +125,22 @@ private struct MoreTab: View {
 /// every tab, so the scan status overlay lives here rather than on one screen.
 private struct TabRootView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(Player.self) private var player
     let tab: AppTab
+    var onTapMini: () -> Void = {}
 
     var body: some View {
         rootContent
             .overlay(alignment: .bottom) {
-                if library.isScanning, let p = library.scanProgress {
-                    ScanStatusCapsule(done: p.done, total: p.total)
+                VStack(spacing: 0) {
+                    if library.isScanning, let p = library.scanProgress {
+                        ScanStatusCapsule(done: p.done, total: p.total)
+                    }
+                    #if os(Android)
+                    if player.currentTrack != nil {
+                        MiniPlayer(onTap: onTapMini)
+                    }
+                    #endif
                 }
             }
     }
@@ -149,7 +166,7 @@ private struct ScanStatusCapsule: View {
 
     var body: some View {
         Text("Scanning \(done)/\(total)…")
-            .font(.caption.monospacedDigit())
+            .font(.caption.tabularDigits)
             .padding(6)
             .background(.ultraThinMaterial, in: Capsule())
             .padding(.bottom, 4)
@@ -220,13 +237,13 @@ private struct MiniAccessory: View {
         // Lift the row off the accessory's top edge and sit it nearer the waveform.
         .padding(.top, 6)
         .padding(.horizontal, 12)
-        .contentShape(Rectangle())
+        .tappableRow()
         .onTapGesture(perform: onTap)
     }
 
     @ViewBuilder private var artwork: some View {
         if let art = player.currentArtwork {
-            Image(uiImage: art).resizable().aspectRatio(contentMode: .fill)
+            Image(platformImage: art).resizable().aspectRatio(contentMode: .fill)
         } else {
             ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 5)
         }

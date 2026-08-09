@@ -43,7 +43,7 @@ struct NowPlayingView: View {
                     .buttonStyle(.plain)
                     if let album = track.album {
                         Button { goToAlbum(focus: nil) } label: {
-                            Text(album).font(.subheadline).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                            Text(album).font(.subheadline).tertiaryForeground().multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .buttonStyle(.plain)
@@ -51,7 +51,7 @@ struct NowPlayingView: View {
                     }
                 }
                 if let fmt = player.currentTrack?.formatDescription {
-                    Text(fmt).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                    Text(fmt).font(.caption.tabularDigits).tertiaryForeground()
                 }
             }
             .padding(.horizontal)
@@ -71,7 +71,7 @@ struct NowPlayingView: View {
 
     @ViewBuilder private var artwork: some View {
         if let art = player.currentArtwork {
-            Image(uiImage: art).resizable().aspectRatio(contentMode: .fit)
+            Image(platformImage: art).resizable().aspectRatio(contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
         } else {
             ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 16)
@@ -114,7 +114,7 @@ struct NowPlayingView: View {
                 Spacer()
                 Text("-" + formatDuration(Double(remainingSeconds)))
             }
-            .font(.caption.monospacedDigit())
+            .font(.caption.tabularDigits)
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal)
@@ -199,10 +199,16 @@ struct NowPlayingView: View {
         if let next = player.nextUpTrack {
             HStack(spacing: 6) {
                 Image(systemName: "text.line.first.and.arrowtriangle.forward")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                Text("Next: ").foregroundStyle(.tertiary)
-                + Text(next.title).foregroundStyle(.secondary)
-                + Text(next.artist.map { " — \($0)" } ?? "").foregroundStyle(.tertiary)
+                    .font(.caption2).tertiaryForeground()
+                // Three runs in a row rather than one concatenated Text: SkipSwiftUI
+                // has no `+` on Text, and an HStack with no spacing reads the same.
+                HStack(spacing: 0) {
+                    Text("Next: ").tertiaryForeground()
+                    Text(next.title).foregroundStyle(.secondary)
+                    if let artist = next.artist {
+                        Text(" — \(artist)").tertiaryForeground()
+                    }
+                }
                 Spacer(minLength: 0)
             }
             .font(.caption)

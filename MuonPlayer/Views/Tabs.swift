@@ -75,7 +75,7 @@ struct TabsReorderView: View {
                         Label(tab.title, systemImage: tab.systemImage)
                         Spacer()
                         if index >= visibleCount {
-                            Text("More").font(.caption).foregroundStyle(.tertiary)
+                            Text("More").font(.caption).tertiaryForeground()
                         }
                     }
                 }
@@ -84,7 +84,12 @@ struct TabsReorderView: View {
                 Text("Drag to reorder. The first \(visibleCount) tabs appear on the bottom bar; the rest are grouped under “More”.")
             }
         }
+        // Holding the list in edit mode is what makes the rows draggable without an
+        // Edit button. Android has no editMode; Compose's reorderable list always
+        // offers the handle, so onMove alone is enough there.
+        #if !os(Android)
         .environment(\.editMode, .constant(.active))
+        #endif
         .navigationTitle("Tab Order")
         .navigationBarTitleDisplayMode(.inline)
     }

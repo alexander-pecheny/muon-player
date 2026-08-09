@@ -5,10 +5,12 @@
     scripts/run-mac.py --release       # build Release
     scripts/run-mac.py --clean         # clean build
     scripts/run-mac.py --no-open       # build only
+    scripts/run-mac.py --install       # replace the /Applications copy, run that
     scripts/run-mac.py --logs          # run in the foreground, streaming stdout/stderr
     scripts/run-mac.py --refresh-icon-cache   # after changing the app icon
 """
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +19,7 @@ REPO = Path(__file__).resolve().parent.parent
 PROJECT = REPO / "MuonPlayer.xcodeproj"
 SCHEME = "MuonPlayerMac"
 BUNDLE = "me.pecheny.muonplayer"
+APPLICATIONS = Path("/Applications")
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks"
               "/LaunchServices.framework/Versions/A/Support/lsregister")
 
@@ -63,6 +66,19 @@ def product(configuration: str) -> Path:
     return max(apps, key=lambda p: p.stat().st_mtime)
 
 
+def install(app: Path, configuration: str) -> Path:
+    """Replace the /Applications copy, so Spotlight launches what was just built."""
+    target = APPLICATIONS / app.name
+    subprocess.run(["pkill", "-x", SCHEME], capture_output=True)
+    # ditto merges rather than replaces, so the old bundle goes first or its stale
+    # files survive underneath the new one.
+    shutil.rmtree(target, ignore_errors=True)
+    subprocess.run(["ditto", str(app), str(target)], check=True)
+    subprocess.run([LSREGISTER, "-f", str(target)], check=True)
+    print(f"installed {target} ({configuration})")
+    return target
+
+
 def refresh_icon_cache(app: Path) -> None:
     """Make the Dock show a changed app icon.
 
@@ -82,6 +98,8 @@ def main() -> None:
     ap.add_argument("--release", action="store_true", help="build Release instead of Debug")
     ap.add_argument("--clean", action="store_true", help="clean before building")
     ap.add_argument("--no-open", action="store_true", help="build only, don't launch")
+    ap.add_argument("--install", action="store_true",
+                    help="copy the built app over /Applications and launch that one")
     ap.add_argument("--logs", action="store_true",
                     help="run in the foreground and stream the app's output")
     ap.add_argument("--refresh-icon-cache", action="store_true",
@@ -93,6 +111,8 @@ def main() -> None:
 
     app = product(configuration)
     print(f"app: {app}")
+    if args.install:
+        app = install(app, configuration)
     if args.refresh_icon_cache:
         refresh_icon_cache(app)
     if args.no_open:

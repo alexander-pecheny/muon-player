@@ -34,14 +34,14 @@ struct HistoryView: View {
                         .disabled(entry.path == nil)
                         if let listen = listenLabel(entry) {
                             Text(listen)
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
+                                .font(.caption2.tabularDigits)
+                                .tertiaryForeground()
                         }
                     }
                     Spacer(minLength: 8)
                     Text(Self.relative(entry.playedAt))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .font(.caption.tabularDigits)
+                        .tertiaryForeground()
                 }
             }
         }
@@ -80,8 +80,8 @@ struct HistoryView: View {
                 }
                 .buttonStyle(.plain)
                 Text(liveListenLabel)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .font(.caption2.tabularDigits)
+                    .tertiaryForeground()
             }
             Spacer(minLength: 8)
             Text("now")
@@ -105,7 +105,7 @@ struct HistoryView: View {
         } else if scrobbler.isLoggedIn, player.duration > 30 {
             Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(player.accentColor)
         } else {
-            Image(systemName: "minus.circle").foregroundStyle(.tertiary)
+            Image(systemName: "minus.circle").tertiaryForeground()
         }
     }
 
@@ -148,17 +148,11 @@ struct HistoryView: View {
         case .pending:
             Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
         case .ineligible:
-            Image(systemName: "minus.circle").foregroundStyle(.tertiary)
+            Image(systemName: "minus.circle").tertiaryForeground()
         }
     }
 
-    private static let fmt: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
-
     private static func relative(_ unix: Int) -> String {
-        fmt.localizedString(for: Date(timeIntervalSince1970: TimeInterval(unix)), relativeTo: Date())
+        relativeTimeString(sinceUnix: unix)
     }
 }

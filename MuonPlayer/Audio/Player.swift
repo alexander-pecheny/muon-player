@@ -6,9 +6,9 @@ import AVFoundation
 import MediaPlayer
 #endif
 import Observation
-#if MUON_APPLE_UI
+// Not gated: Android gets SwiftUI from skip-fuse-ui, and the artwork accent below
+// is published to the screens on every platform.
 import SwiftUI
-#endif
 
 /// Gapless audio player built on AVAudioEngine + a single AVAudioPlayerNode.
 ///
@@ -565,7 +565,6 @@ final class Player {
 
     // MARK: - Artwork / Now Playing
 
-    #if MUON_APPLE_UI
     private(set) var currentArtwork: PlatformImage?
 
     /// A vivid accent derived from the current track's artwork (Spotify-style),
@@ -590,11 +589,6 @@ final class Player {
             }
         }
     }
-    #else
-    // Without the Apple UI layer the player holds no image and no accent colour;
-    // Android decodes artwork with BitmapFactory up in the view instead.
-    private func loadArtwork(for track: Track) {}
-    #endif
 
     // MARK: - Interruptions
 

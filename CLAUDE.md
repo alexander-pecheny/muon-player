@@ -188,10 +188,20 @@ reason.
 ## Android
 
 A third app, built from the same `MuonPlayer/{Audio,Library,Models,Playback,Scanner,
-Scrobble}` sources. [Skip](https://skip.dev) compiles the Swift natively with the
-Swift 6.3 Android SDK and renders the SwiftUI in `Sources/MuonSkip` as Jetpack
-Compose, so the library, scanner, tag writer, decoder and gapless engine are the
-same code the Apple apps run — not a reimplementation.
+Scrobble,Shared,Views}` sources. [Skip](https://skip.dev) compiles the Swift natively
+with the Swift 6.3 Android SDK, so the library, scanner, tag writer, decoder,
+gapless engine **and the screens** are the same code the Apple apps run — not a
+reimplementation.
+
+Under **Skip Fuse** the SwiftUI is compiled natively against the `SwiftUI` module
+that skip-fuse-ui vends for Android (`@_exported import SkipSwiftUI`), and only the
+root view is bridged to Kotlin. Nothing is transpiled, so the screens do not need to
+live in the plugin target — `Views` and `Shared` are compiled into **`MuonCore`**
+instead, which keeps them in the same module as `Player` and `LibraryStore`. Putting
+them in `Sources/MuonSkip` would have meant a module boundary, and making the whole
+core `public` to cross it. `Sources/MuonSkip` is now just the bridge:
+`MuonSkipRootView` shows `RootView`, which builds the object graph `MuonPlayerApp`
+builds on iOS.
 
 ```bash
 scripts/android-run.sh                                 # build, install, launch
@@ -200,7 +210,6 @@ scripts/android-run.sh --music ~/Music_shared/Some/Album   # …and push an albu
 # or by hand:
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export PATH="$HOME/.swiftly/bin:$PATH"
-swift build --target MuonCore --swift-sdk aarch64-unknown-linux-android28  # core only
 skip android build                                     # core + UI → libMuonSkip.so
 (cd Android && gradle assembleDebug)                   # → .build/Android/app/outputs/apk/debug
 emulator -avd muon-test -no-window -no-audio -no-snapshot &
@@ -277,9 +286,45 @@ key. So the core reads and writes those through **`Library/Prefs.swift`**, which
 for anything new that has to persist; `diagnose` prints
 `persisted prefs=true userdefaults=false` from inside one process if you doubt it.
 
+### What SkipSwiftUI does not have
+
+Every screen crossed over, but SkipSwiftUI is a subset of SwiftUI and the holes are
+real. Each one is bridged once in **`MuonPlayer/Shared/UICompat.swift`** so the views
+go on reading the same on every platform — reach for a helper there rather than
+scattering `#if os(Android)` through a screen.
+
+| Missing | Bridged as |
+|---|---|
+| `contentShape` | `tappableRow()` |
+| `.tertiary`, `.quaternary` | `tertiaryForeground()`, falling back to `.secondary` |
+| `monospacedDigit` | `Font.tabularDigits` |
+| `Text + Text` | a zero-spacing `HStack` |
+| `ContentUnavailableView` | reimplemented, including the `actions:` form |
+| `textSelection`, `listRowInsets` | `selectableText()`, `flushListRow()` — no-ops |
+| `RelativeDateTimeFormatter` | `relativeTimeString(sinceUnix:)` |
+| `.navigationBarDrawer` placement | `filterSearchable()` |
+| `editMode` | dropped; a Compose reorderable list always offers the handle |
+| `safeAreaInset`, `tabViewBottomAccessory` | mini player moved into the tab-content overlay |
+
+`contentShape` is the one worth knowing about: it does not merely fail on its own
+line, it breaks the whole modifier chain after it, so one missing tap-target
+modifier reported as four unrelated errors elsewhere in the file.
+
+`sheet`, `contextMenu`, `swipeActions`, `searchable`, `navigationDestination`,
+`LazyVGrid`, `NavigationStack` and `TabView` all exist and needed nothing.
+
+`PlatformImage` no longer forks. skip-fuse-ui's SwiftUI re-exports a `UIImage` whose
+`init(data:)` is BitmapFactory underneath, so `MuonPlayer/Shared/Platform.swift`
+defines it for all three platforms and the old encoded-bytes struct in
+`Compat/ImageCompat.swift` is gone.
+
 Still missing: a Media3 MediaSession (no lock-screen controls — `MUON_APPLE_UI`
-compiles the `MPNowPlayingInfoCenter` code out), artwork in the UI, and the rest of
-the iOS screens.
+compiles the `MPNowPlayingInfoCenter` code out), and the artwork accent tint.
+`DominantColor` needs to read pixels, `UIImage.cgImage` on Android is an
+`@available(*, unavailable)` stub returning `Any?`, and getting at the samples means
+going through `android.graphics.Bitmap` on the Android bridge. Until then
+`downsampledPixels` returns nil and every caller falls back to `neutralAccent`, so
+the tint is grey there rather than wrong.
 
 ### Shipping it
 

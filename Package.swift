@@ -25,8 +25,13 @@ let ffmpegLibs = ["avcodec", "avformat", "avutil", "swresample"]
 
 // Everything under MuonPlayer/ that belongs to the Apple apps only. Listing it
 // keeps SwiftPM from warning about files it can see but never builds.
-let appleOnly = ["Info.plist", "PrivacyInfo.xcprivacy", "Secrets.swift",
-                 "Assets.xcassets", "Resources", "Shared", "Views", "App", "SelfTests"]
+//
+// Views and Shared are *not* on this list: under Skip Fuse the screens compile
+// natively against skip-fuse-ui's SwiftUI, and they live in MuonCore rather than
+// in the plugin target so they stay in the same module as Player and
+// LibraryStore. Splitting them would mean making the whole core public.
+let appleOnly = ["Info.plist", "PrivacyInfo.xcprivacy",
+                 "Assets.xcassets", "Resources", "App", "SelfTests"]
 
 let apple: [Platform] = [.iOS, .macOS]
 
@@ -43,6 +48,11 @@ for lib in ffmpegLibs {
 var coreDeps: [Target.Dependency] = ["CFFmpeg", "CSQLite"]
 coreDeps.append(.target(name: "CAAudio", condition: .when(platforms: [.android])))
 coreDeps.append(.product(name: "Crypto", package: "swift-crypto",
+                         condition: .when(platforms: [.android])))
+// The screens import SwiftUI, which on Android is a module skip-fuse-ui vends
+// (its SwiftUI target is built only when TARGET_OS_ANDROID is set). Apple has
+// SwiftUI in the SDK and needs no dependency for it.
+coreDeps.append(.product(name: "SkipFuseUI", package: "skip-fuse-ui",
                          condition: .when(platforms: [.android])))
 coreDeps += ffmpegAppleDeps
 
@@ -91,7 +101,8 @@ targets.append(
         dependencies: coreDeps,
         path: "MuonPlayer",
         exclude: appleOnly,
-        sources: ["Audio", "Library", "Models", "Playback", "Scanner", "Scrobble", "Compat"],
+        sources: ["Audio", "Library", "Models", "Playback", "Scanner", "Scrobble", "Compat",
+                  "Shared", "Views", "Secrets.swift"],
         swiftSettings: coreSwiftSettings,
         linkerSettings: coreLinks
     ))

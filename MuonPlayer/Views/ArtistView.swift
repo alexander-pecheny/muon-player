@@ -34,7 +34,7 @@ struct ArtistView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                             if let y = album.year {
                                 Text(String(y))
-                                    .font(.caption.monospacedDigit())
+                                    .font(.caption.tabularDigits)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)

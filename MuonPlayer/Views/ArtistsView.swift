@@ -37,13 +37,13 @@ struct ArtistsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 8)
                         Text("\(artist.albumCount)")
-                            .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                            .font(.caption.tabularDigits).tertiaryForeground()
                     }
                 }
             }
         }
         .listStyle(.plain)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter artists")
+        .filterSearchable(text: $query, prompt: "Filter artists")
         .overlay {
             if artists.isEmpty {
                 ContentUnavailableView("No Artists", systemImage: "music.mic")
