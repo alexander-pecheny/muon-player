@@ -10,6 +10,7 @@ struct NowPlayingView: View {
     @State private var waveform: [Float] = []
     // Non-nil only while the user is actively dragging the waveform.
     @State private var scrubFraction: Double?
+    @State private var zoomingArtwork: ArtworkRef?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -20,6 +21,12 @@ struct NowPlayingView: View {
                 .frame(maxWidth: 340)
                 .shadow(radius: 16, y: 8)
                 .padding(.horizontal)
+                .onTapGesture {
+                    // Only embedded art can be zoomed, so a track without any is
+                    // showing the placeholder and has nothing to open.
+                    guard let track = player.currentTrack, track.hasArtwork else { return }
+                    zoomingArtwork = ArtworkRef(path: track.url.path)
+                }
 
             VStack(spacing: 4) {
                 if let track = player.currentTrack {
@@ -67,6 +74,7 @@ struct NowPlayingView: View {
         .tint(player.accentColor)
         .presentationDragIndicator(.hidden)
         .sheet(isPresented: $showQueue) { QueueView() }
+        .fullScreenCover(item: $zoomingArtwork) { ArtworkZoomView(path: $0.path) }
     }
 
     @ViewBuilder private var artwork: some View {

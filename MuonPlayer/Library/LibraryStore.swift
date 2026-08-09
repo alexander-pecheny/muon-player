@@ -330,15 +330,45 @@ final class LibraryStore {
     }
 
     /// All tracks whose (effective) album-artist matches `track`'s, ordered by
-    /// album release year then disc/track (used by the "Repeat Artist" playhead).
-    ///
-    /// Unlike the folder-scoped orders, this one reaches across roots, so a lossy
-    /// mirror of an album lands right beside the lossless original — same album,
-    /// same track number — and the same song would play twice in a row. The
-    /// duplicates are collapsed to one copy each.
+    /// album release year, then folder, then disc/track (used by the "Repeat
+    /// Artist" playhead). This one reaches across roots, so a lossy mirror of an
+    /// album can land beside the lossless original — the folder tier is what keeps
+    /// the two from alternating.
     func albumArtistTracks(for track: Track) async -> [Track] {
-        let tracks = await database.tracks(byAlbumArtist: track.effectiveAlbumArtist)
-        return Self.collapseDuplicates(Self.orderByAlbum(tracks), preferring: track)
+        await Self.orderByAlbum(database.tracks(byAlbumArtist: track.effectiveAlbumArtist))
+    }
+
+    /// Split an album's tracks into one group per folder — but only when the
+    /// folders are alternative *rips* of it. The other reason an album spans
+    /// folders is a folder per disc, and those are one release: they hold disjoint
+    /// disc numbers, where rips repeat the same ones. A box set would otherwise
+    /// read as thirteen rips, each playable only as far as its own disc.
+    ///
+    /// `tracks` must already be folder-contiguous, which is how the database
+    /// returns an album.
+    nonisolated static func ripGroups(
+        _ tracks: [Track], folder: (Track) -> String
+    ) -> [(folder: String, tracks: [Track])] {
+        var groups: [(String, [Track])] = []
+        for track in tracks {
+            let name = folder(track)
+            if groups.last?.0 == name {
+                groups[groups.count - 1].1.append(track)
+            } else {
+                groups.append((name, [track]))
+            }
+        }
+        guard groups.count > 1 else { return groups.map { (folder: $0.0, tracks: $0.1) } }
+
+        var seen: Set<Int> = []
+        for group in groups {
+            let discs = Set(group.1.map { $0.discNo ?? 1 })
+            if !seen.isDisjoint(with: discs) {
+                return groups.map { (folder: $0.0, tracks: $0.1) }
+            }
+            seen.formUnion(discs)
+        }
+        return [(folder: groups[0].0, tracks: tracks)]
     }
 
     /// Absolute path of the root-level folder holding `track` (its artist folder).
@@ -349,10 +379,22 @@ final class LibraryStore {
         return root(containing: path)?.topFolder(of: path)
     }
 
-    /// Order tracks chronologically by album (year, then title), then disc/track,
-    /// ignoring where the files live — an artist's discography plays in release
-    /// order even when every album sits in one flat folder. Albums with no year
-    /// tag anywhere sort last.
+    /// Order tracks chronologically by album (year, then title), then disc, folder
+    /// and track — an artist's discography plays in release order even when every
+    /// album sits in one flat folder. Albums with no year tag anywhere sort last.
+    ///
+    /// The folder tier is what keeps two rips of one album (a FLAC and an OPUS,
+    /// say) from alternating copies of the same song: each folder is a contiguous
+    /// block, so track 5 of a rip is followed by track 6 of that same rip. It sits
+    /// *below* disc because the other reason one album spans folders is a folder
+    /// per disc, and those must still play in disc order however they are named
+    /// ("Bonus" before "Main", side titles, a 13-folder Chopin box).
+    ///
+    /// Deciding which copy to drop was tried instead and could not be made to work
+    /// — two rips of a track routinely differ by several seconds, so any length
+    /// test either kept both or collapsed genuinely different recordings. Playing
+    /// everything, in a sensible order, is the honest answer; finding redundant
+    /// copies is `scripts/muon-dedup.swift`'s job.
     ///
     /// A title is ranked by the *earliest* year on any of its tracks, but tracks
     /// within it are then split by their own year. So an untagged track stays with
@@ -376,58 +418,12 @@ final class LibraryStore {
             if tya != tyb { return tya < tyb }
             let dna = a.discNo ?? 0, dnb = b.discNo ?? 0
             if dna != dnb { return dna < dnb }
+            let fa = a.url.deletingLastPathComponent().path, fb = b.url.deletingLastPathComponent().path
+            if fa != fb { return fa.localizedStandardCompare(fb) == .orderedAscending }
             let tna = a.trackNo ?? Int.max, tnb = b.trackNo ?? Int.max
             if tna != tnb { return tna < tnb }
             return a.url.lastPathComponent.localizedStandardCompare(b.url.lastPathComponent) == .orderedAscending
         }
-    }
-
-    /// Keep one file per recording, in the order given. `anchor` — the track that
-    /// is playing — always survives, so rebuilding the timeline around it never
-    /// drops the playhead's own file out from under it.
-    nonisolated static func collapseDuplicates(_ tracks: [Track], preferring anchor: Track?) -> [Track] {
-        var kept: [Track] = []
-        var slot: [String: Int] = [:]
-        for track in tracks {
-            let key = recordingKey(track)
-            if let i = slot[key], sameLength(kept[i], track) {
-                if isBetterCopy(track, than: kept[i], anchor: anchor) { kept[i] = track }
-            } else {
-                slot[key] = kept.count
-                kept.append(track)
-            }
-        }
-        return kept
-    }
-
-    /// Where the tags place a track within its album. Two files agreeing on all of
-    /// it are the same song; what differs is only which encode of it you have.
-    private nonisolated static func recordingKey(_ t: Track) -> String {
-        [t.displayAlbum.lowercased(), String(t.discNo ?? 1),
-         t.trackNo.map(String.init) ?? "", t.title.lowercased()].joined(separator: "\u{1}")
-    }
-
-    /// A transcode differs from its source by the encoder's priming delay — a few
-    /// milliseconds. A second of slack is still far tighter than any alternate
-    /// take, remaster or live version that might share the same tags.
-    private nonisolated static func sameLength(_ a: Track, _ b: Track) -> Bool {
-        guard let da = a.duration, let db = b.duration else { return false }
-        return abs(da - db) <= 1
-    }
-
-    private static let losslessCodecs: Set<String> = [
-        "flac", "alac", "wavpack", "ape", "tta",
-        "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f32be", "pcm_s16be", "pcm_u8",
-    ]
-
-    private nonisolated static func isBetterCopy(_ a: Track, than b: Track, anchor: Track?) -> Bool {
-        if let anchor {
-            if a.url == anchor.url { return true }
-            if b.url == anchor.url { return false }
-        }
-        let la = losslessCodecs.contains(a.codec ?? ""), lb = losslessCodecs.contains(b.codec ?? "")
-        if la != lb { return la }
-        return (a.bitrate ?? 0) > (b.bitrate ?? 0)
     }
 
     // MARK: - Tag editing (writes tags into the actual files)
