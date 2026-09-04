@@ -54,6 +54,7 @@ struct AlbumCell: View {
                 }
             }
             .buttonStyle(.plain)
+            .commandClickOpens { router.openAlbum(album) }
 
             HStack(spacing: 4) {
                 Button { router.openArtist(album.artist) } label: {
@@ -72,6 +73,7 @@ struct AlbumCell: View {
             Button("Play") { Task { await play() } }
             Button("Add to Queue") { Task { await enqueue() } }
             Divider()
+            Button("Open in New Tab") { router.openAlbum(album, inNewTab: true) }
             Button("Go to Artist") { router.openArtist(album.artist) }
             Button("Edit Tags…") { editing = true }
             Button("Reveal in Finder") { Task { await reveal() } }

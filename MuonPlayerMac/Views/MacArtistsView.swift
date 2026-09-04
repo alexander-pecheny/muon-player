@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MacArtistsView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(MacRouter.self) private var router
 
     private var artists: [ArtistResult] {
         let names = Set(library.albums.map(\.artist))
@@ -23,6 +24,10 @@ struct MacArtistsView: View {
                     Text(artist.name)
                 }
                 .padding(.vertical, 2)
+            }
+            .commandClickOpens { router.openArtist(artist.name) }
+            .contextMenu {
+                Button("Open in New Tab") { router.openArtist(artist.name, inNewTab: true) }
             }
         }
         .overlay {

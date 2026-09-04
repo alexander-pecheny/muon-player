@@ -8,6 +8,7 @@ struct MacFoldersView: View {
 
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
+    @Environment(MacRouter.self) private var router
     @State private var subfolders: [URL] = []
     @State private var trackFiles: [Track] = []
     @State private var loaded = false
@@ -23,7 +24,11 @@ struct MacFoldersView: View {
                             Label(folder.lastPathComponent,
                                   systemImage: isRoot ? "folder.badge.gearshape" : "folder")
                         }
-                        .contextMenu { RevealInFinderButton(url: folder) }
+                        .commandClickOpens { router.openFolder(folder) }
+                        .contextMenu {
+                            Button("Open in New Tab") { router.openFolder(folder, inNewTab: true) }
+                            RevealInFinderButton(url: folder)
+                        }
                     }
                 }
             }
