@@ -28,6 +28,10 @@ struct MuonPlayerMacApp: App {
                 .environment(folders)
                 .environment(router)
                 .frame(minWidth: 900, minHeight: 560)
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification)) { _ in
+                    library.rescanOnActivation()
+                }
                 .task {
                     player.library = library
                     connectScrobbler(scrobbler, to: player)
@@ -110,7 +114,7 @@ struct MuonCommands: Commands {
                 }
             }
             .keyboardShortcut("o", modifiers: .command)
-            Button("Rescan Library") { Task { await library.rescan() } }
+            Button("Rescan Library") { Task { await library.rescanUntilSettled() } }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(library.isScanning || folders.isEmpty)
         }

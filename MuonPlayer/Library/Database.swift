@@ -274,15 +274,20 @@ actor Database {
     /// no trailing slash) narrows the sweep to those subtrees — a scan of one album
     /// folder saw only that folder's files, so it must not delete the rest of the
     /// library for being absent from them.
-    func pruneMissing(existingPaths: Set<String>, underFolders: [String]? = nil) {
+    /// Returns how many rows were deleted, which is how a scan tells whether the
+    /// library actually changed and the UI needs reloading.
+    @discardableResult
+    func pruneMissing(existingPaths: Set<String>, underFolders: [String]? = nil) -> Int {
         let all = allTrackPaths()
+        var removed = 0
         for path in all where !existingPaths.contains(path) {
             if let underFolders, !underFolders.contains(where: { path.hasPrefix($0 + "/") }) { continue }
             guard let stmt = prepare("DELETE FROM tracks WHERE path = ?") else { continue }
             bindText(stmt, 1, path)
-            sqlite3_step(stmt)
+            if sqlite3_step(stmt) == SQLITE_DONE { removed += Int(sqlite3_changes(db)) }
             sqlite3_finalize(stmt)
         }
+        return removed
     }
 
     /// Rewrite stored track paths whose container prefix no longer matches the

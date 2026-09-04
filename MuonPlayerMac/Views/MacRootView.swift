@@ -80,7 +80,7 @@ struct MacRootView: View {
                 }
             }
             .listStyle(.sidebar)
-            ScanStatusView()
+            ScanFooterView()
         }
         .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 260)
     }
@@ -133,22 +133,33 @@ private extension View {
 /// awaits the database actor once per file, which hands the main actor back to
 /// SwiftUI each time, so that rebuild ran once per file and a full re-index of a
 /// 14k-track library took minutes instead of seconds.
-private struct ScanStatusView: View {
+private struct ScanFooterView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(LibraryFolders.self) private var folders
 
     var body: some View {
-        if library.scanPhase != .idle {
+        // Nothing to rescan and nothing to report until a folder is added.
+        if !folders.isEmpty {
             VStack(alignment: .leading, spacing: 5) {
                 Divider()
-                Text(library.scanPhase.label)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).monospacedDigit()
-                    .padding(.top, 3)
-                // Walking the folders has no total, so it gets an indeterminate bar.
-                if let fraction = library.scanPhase.fraction {
-                    ProgressView(value: fraction)
+                if library.scanPhase != .idle {
+                    Text(library.scanPhase.label)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).monospacedDigit()
+                        .padding(.top, 3)
+                    // Walking the folders has no total, so it gets an indeterminate bar.
+                    if let fraction = library.scanPhase.fraction {
+                        ProgressView(value: fraction)
+                    } else {
+                        ProgressView().progressViewStyle(.linear)
+                    }
                 } else {
-                    ProgressView().progressViewStyle(.linear)
+                    Button { Task { await library.rescanUntilSettled() } } label: {
+                        Label("Rescan Library", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .padding(.top, 3)
                 }
             }
             .padding(.horizontal, 10)

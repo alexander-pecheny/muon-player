@@ -138,13 +138,58 @@ final class LibraryStore {
     /// nothing to read and the scan UI never appears. Files are only re-read when
     /// they actually change on disk, or when `kScannerVersion` is bumped because
     /// the metadata-reading logic itself changed (a rare, deliberate event).
-    func rescan() async {
-        guard !isScanning else { return }
+    /// `busy` is deliberately not `unchanged`: the settle loop stops on
+    /// `unchanged`, and a pass that merely collided with another scan has learnt
+    /// nothing about whether the library is still moving.
+    enum ScanOutcome { case busy, unchanged, changed }
+
+    @discardableResult
+    func rescan() async -> ScanOutcome {
+        guard !isScanning else { return .busy }
         // If the metadata-reading logic changed since this DB was populated,
         // re-read every file (repairs libraries scanned by the buggy tag reader).
         let forceReadAll = await database.scannerVersion() < kScannerVersion
-        await scan(folders: roots.map(\.url), pruneScope: nil, forceReadAll: forceReadAll)
+        let changed = await scan(folders: roots.map(\.url), pruneScope: nil, forceReadAll: forceReadAll)
         if forceReadAll { await database.setScannerVersion(kScannerVersion) }
+        return changed ? .changed : .unchanged
+    }
+
+    /// Seconds between passes of the settle loop. A test shortens it.
+    var settleDelay: Duration = .seconds(5)
+
+    /// True while `rescanUntilSettled` is looping, so `scan` holds the seam pass
+    /// back rather than starting it once per pass.
+    private var settling = false
+
+    /// Rescan, and keep rescanning until a pass finds nothing.
+    ///
+    /// One scan of a folder still being copied into sees half an album — the rest
+    /// of the files are not there yet, and the ones that are may be truncated.
+    /// Their mtimes change as the copy finishes, so successive passes pick up what
+    /// the last one missed and the loop stops on the first quiet pass.
+    func rescanUntilSettled() async {
+        guard !settling else { return }
+        settling = true
+        defer { settling = false }
+
+        var changed = false
+        loop: while true {
+            switch await rescan() {
+            case .changed: changed = true
+            case .busy: break            // wait for the other scan and look again
+            case .unchanged: break loop
+            }
+            // A cancelled sleep throws, which is the loop's only way out from
+            // under a folder whose files never stop changing.
+            guard (try? await Task.sleep(for: settleDelay)) != nil else { return }
+        }
+        if changed { startGaplessMaintenance() }
+    }
+
+    /// Rescan because the app came to the front — the moment after the user was
+    /// off in Finder or the Files app adding music.
+    func rescanOnActivation() {
+        Task { await rescanUntilSettled() }
     }
 
     /// Re-read just these folders — what the album screen's Refresh button does
@@ -156,8 +201,19 @@ final class LibraryStore {
         await scan(folders: folders, pruneScope: folders, forceReadAll: true)
     }
 
-    private func scan(folders: [URL], pruneScope: [URL]?, forceReadAll: Bool) async {
-        guard !folders.isEmpty else { return }
+    /// Returns whether the library changed — files read, or rows pruned.
+    @discardableResult
+    private func scan(folders: [URL], pruneScope: [URL]?, forceReadAll: Bool) async -> Bool {
+        // A root on an unmounted drive — or one the sandbox will not open — walks
+        // as empty, and an unscoped prune would then delete every track on it: a
+        // library silently emptied by pulling a cable, and a full re-read of the
+        // drive when it comes back. Walk only what is readable, prune only that.
+        let fm = FileManager.default
+        let reachable = folders.filter { fm.isReadableFile(atPath: $0.path) }
+        guard !reachable.isEmpty else { return false }
+        let pruneScope = pruneScope ?? (reachable.count == folders.count ? nil : reachable)
+        let folders = reachable
+
         isScanning = true
         scanPhase = .findingFiles(found: 0)
         defer { isScanning = false; scanProgress = nil; scanPhase = .idle }
@@ -195,10 +251,21 @@ final class LibraryStore {
             await readAndUpsert(toRead)
         }
 
-        await database.pruneMissing(existingPaths: existingPaths,
-                                    underFolders: pruneScope?.map(LibraryRoot.canonicalPath(of:)))
+        let removed = await database.pruneMissing(existingPaths: existingPaths,
+                                                  underFolders: pruneScope?.map(LibraryRoot.canonicalPath(of:)))
+
+        // Reloading means re-running the album grouping over the whole library and
+        // rebuilding every view that holds a snapshot of it. A scan that found
+        // nothing — every launch, and every activation but the interesting one —
+        // has no business doing that.
+        // Unconditional, so a seam pass cut short by quitting resumes on the next
+        // launch even though that launch finds nothing to index. Inside the settle
+        // loop it is held back and started once, at the end.
+        if !settling { startGaplessMaintenance() }
+
+        guard !toRead.isEmpty || removed > 0 else { return false }
         await loadFromDatabase()
-        startGaplessMaintenance()
+        return true
     }
 
     /// Read metadata for the given files concurrently and upsert the results.

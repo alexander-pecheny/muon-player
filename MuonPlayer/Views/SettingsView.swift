@@ -54,7 +54,7 @@ struct SettingsView: View {
             Section {
                 LabeledContent("Tracks", value: "\(library.trackCount)")
                 Button {
-                    Task { await library.rescan() }
+                    Task { await library.rescanUntilSettled() }
                 } label: {
                     HStack {
                         Text("Rescan Library")
