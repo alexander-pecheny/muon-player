@@ -36,11 +36,11 @@ struct MacRootView: View {
                             }
                         }
                         .navigationDestination(for: Album.self) {
-                            MacAlbumDetailView(album: $0).tabTitle($0.title)
+                            MacAlbumDetailView(album: $0).tabTitle($0.title, artwork: $0.artworkPath)
                         }
                         .navigationDestination(for: AlbumRef.self) {
                             MacAlbumDetailView(album: $0.album, focusPath: $0.focusPath)
-                                .tabTitle($0.album.title)
+                                .tabTitle($0.album.title, artwork: $0.album.artworkPath)
                         }
                         .navigationDestination(for: ArtistRef.self) {
                             MacArtistView(artist: $0.name).tabTitle($0.name)

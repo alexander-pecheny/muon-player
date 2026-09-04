@@ -90,7 +90,9 @@ final class TabRouter {
 
     /// Called by a pushed page to name itself, which is what its tab is called
     /// while that page is showing.
-    func nameCurrentPage(_ title: String) { active.name(title) }
+    func nameCurrentPage(_ title: String, artwork: String? = nil) {
+        active.name(title, artwork: artwork)
+    }
 
     // MARK: - Tabs
 
@@ -150,9 +152,10 @@ final class TabRouter {
     /// song name rather than an album name.
     func openAlbum(_ album: Album, focus: String? = nil) {
         if let focus {
-            active.push(AlbumRef(album: album, focusPath: focus), named: album.title)
+            active.push(AlbumRef(album: album, focusPath: focus),
+                        named: album.title, artwork: album.artworkPath)
         } else {
-            active.push(album, named: album.title)
+            active.push(album, named: album.title, artwork: album.artworkPath)
         }
     }
 
@@ -162,17 +165,19 @@ final class TabRouter {
 }
 
 extension View {
-    /// Name the tab after this page for as long as it is showing.
-    func tabTitle(_ title: String) -> some View {
-        modifier(TabTitle(title: title))
+    /// Name the tab after this page, and give it a cover, for as long as it is
+    /// showing.
+    func tabTitle(_ title: String, artwork: String? = nil) -> some View {
+        modifier(TabTitle(title: title, artwork: artwork))
     }
 }
 
 private struct TabTitle: ViewModifier {
     @Environment(TabRouter.self) private var router
     let title: String
+    let artwork: String?
 
     func body(content: Content) -> some View {
-        content.onAppear { router.nameCurrentPage(title) }
+        content.onAppear { router.nameCurrentPage(title, artwork: artwork) }
     }
 }

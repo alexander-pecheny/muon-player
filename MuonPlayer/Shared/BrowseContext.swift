@@ -23,24 +23,30 @@ final class BrowseContext<Slot: BrowseSlot>: Identifiable {
 
     var paths: [Slot: NavigationPath] = [:]
 
-    /// Names of the pages pushed onto the current slot's path, so a tab can call
-    /// itself after what it is showing. `NavigationPath` will not say what is in
-    /// it, so the destinations report their own names (`tabTitle`).
-    var crumbs: [Slot: [String]] = [:]
+    /// What each page pushed onto the current slot's path is called, and the
+    /// cover to show for it. `NavigationPath` will not say what is in it, so the
+    /// destinations report themselves (`tabTitle`).
+    struct Crumb {
+        let name: String
+        let artworkPath: String?
+    }
+
+    var crumbs: [Slot: [Crumb]] = [:]
 
     init(slot: Slot) { self.slot = slot }
 
-    var title: String { crumbs[slot]?.last ?? slot.defaultTitle }
+    var title: String { crumbs[slot]?.last?.name ?? slot.defaultTitle }
+    var artworkPath: String? { crumbs[slot]?.last?.artworkPath }
 
     var path: NavigationPath { paths[slot] ?? NavigationPath() }
 
-    /// Record `title` as the name of the page now on top, and drop names left
-    /// behind by a pop.
-    func name(_ title: String) {
+    /// Record the page now on top, and drop crumbs left behind by a pop.
+    func name(_ title: String, artwork: String? = nil) {
         var names = crumbs[slot] ?? []
         let depth = path.count
         guard depth > 0 else { return }
-        if names.count < depth { names.append(title) } else { names[depth - 1] = title }
+        let crumb = Crumb(name: title, artworkPath: artwork)
+        if names.count < depth { names.append(crumb) } else { names[depth - 1] = crumb }
         crumbs[slot] = names
     }
 
@@ -50,10 +56,10 @@ final class BrowseContext<Slot: BrowseSlot>: Identifiable {
         }
     }
 
-    func push<V: Hashable>(_ value: V, named title: String) {
+    func push<V: Hashable>(_ value: V, named title: String, artwork: String? = nil) {
         var p = paths[slot] ?? NavigationPath()
         p.append(value)
         paths[slot] = p
-        crumbs[slot] = (crumbs[slot] ?? []) + [title]
+        crumbs[slot] = (crumbs[slot] ?? []) + [Crumb(name: title, artworkPath: artwork)]
     }
 }

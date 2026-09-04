@@ -172,11 +172,11 @@ private struct CommonDestinations: ViewModifier {
     func body(content: Content) -> some View {
         content
             .navigationDestination(for: Album.self) {
-                AlbumDetailView(album: $0).tabTitle($0.title).tabCountToolbar()
+                AlbumDetailView(album: $0).tabTitle($0.title, artwork: $0.artworkPath).tabCountToolbar()
             }
             .navigationDestination(for: AlbumRef.self) {
                 AlbumDetailView(album: $0.album, focusPath: $0.focusPath)
-                    .tabTitle($0.album.title).tabCountToolbar()
+                    .tabTitle($0.album.title, artwork: $0.album.artworkPath).tabCountToolbar()
             }
             .navigationDestination(for: ArtistRef.self) {
                 ArtistView(artist: $0.name).tabTitle($0.name).tabCountToolbar()
