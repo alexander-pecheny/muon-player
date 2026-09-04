@@ -11,6 +11,8 @@ final class MacRouter {
         case home, albums, artists, songs, folders, history
         var id: String { rawValue }
         var defaultTitle: String { title }
+        var storageKey: String { rawValue }
+        init?(storageKey: String) { self.init(rawValue: storageKey) }
 
         var title: String {
             switch self {
@@ -42,10 +44,9 @@ final class MacRouter {
     var showQueue = false
 
     init() {
-        let (sections, active) = Self.restored()
-        let restored = sections.map(BrowseTab.init(slot:))
-        tabs = restored
-        activeID = restored[min(active, restored.count - 1)].id
+        let (open, active) = Self.restored()
+        tabs = open
+        activeID = open[min(active, open.count - 1)].id
     }
 
     var active: BrowseTab { tabs.first { $0.id == activeID } ?? tabs[0] }
@@ -72,6 +73,7 @@ final class MacRouter {
                     self.active.paths[self.active.slot] = new
                     // A pop shortens the trail of names behind the tab's title.
                     self.active.truncateCrumbs(to: new.count)
+                    self.persist()
                 })
     }
 
@@ -84,6 +86,7 @@ final class MacRouter {
     /// while that page is showing.
     func nameCurrentPage(_ title: String, kind: PageKind, artwork: String? = nil) {
         active.name(title, kind: kind, artwork: artwork)
+        persist()
     }
 
     /// Pop the current section back to its root, so a search typed while drilled
@@ -143,6 +146,7 @@ final class MacRouter {
             tab = active
         }
         tab.push(value, named: title, kind: kind, artwork: artwork)
+        persist()
     }
 
     func openArtist(_ name: String, inNewTab: Bool = false) {
@@ -167,22 +171,20 @@ final class MacRouter {
 
     // MARK: - Persistence
 
-    /// Which sections were open, and which tab was in front. Navigation history
-    /// is not restorable — `NavigationPath` holds arbitrary values — so a tab
-    /// comes back at its section root.
-    private static let key = "browseTabs"
+    /// The open tabs, each with the stack behind it, and which was in front.
+    private static let key = "browseTabSnapshots"
     private static let activeKey = "browseTabsActive"
 
     private func persist() {
-        UserDefaults.standard.set(tabs.map(\.slot.rawValue), forKey: Self.key)
+        UserDefaults.standard.set(tabs.compactMap { $0.snapshot() }, forKey: Self.key)
         UserDefaults.standard.set(tabs.firstIndex { $0.id == activeID } ?? 0, forKey: Self.activeKey)
     }
 
-    private static func restored() -> ([Section], Int) {
-        let raw = UserDefaults.standard.array(forKey: key) as? [String] ?? []
-        let sections = raw.compactMap(Section.init(rawValue:))
-        guard !sections.isEmpty else { return ([.albums], 0) }
-        return (sections, max(0, UserDefaults.standard.integer(forKey: activeKey)))
+    private static func restored() -> ([BrowseTab], Int) {
+        let saved = (UserDefaults.standard.array(forKey: key) as? [Data] ?? [])
+            .compactMap(BrowseTab.init(snapshot:))
+        guard !saved.isEmpty else { return ([BrowseTab(slot: .albums)], 0) }
+        return (saved, max(0, UserDefaults.standard.integer(forKey: activeKey)))
     }
 }
 

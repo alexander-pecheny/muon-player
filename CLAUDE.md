@@ -215,9 +215,15 @@ it once there is more than one and opens `TabSwitcherView` — cards, tap to swi
 
 Home may not be in the bar at all, since the order is the user's (Settings → Tab Order) and
 anything past the fourth slot is folded into our own More tab. So a new tab lands on `.more`
-with Home *pushed* onto it, rather than on the More list. Both platforms restore which slots
-were open, not the history behind them, which is why a Home tab made that way comes back
-named More.
+with Home *pushed* onto it, rather than on the More list.
+
+Both platforms restore the tabs whole — the slot **and** the stack behind it — by encoding
+each `NavigationPath` through its `CodableRepresentation`, which is why `Album` and the three
+navigation refs conform to `Codable`. Saving the slot alone was not enough: every tab came
+back at its section root, so an album tab reopened as "Albums" and the tabs were restored in
+name only. A page reporting no cover never erases one already recorded for it, because an
+artist's cover is looked up in the library and that page reappears, on the launch after a
+restore, before the library has finished loading.
 
 ### When the library rescans
 

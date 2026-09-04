@@ -4,7 +4,7 @@ import Observation
 /// The set of top-level tabs. Their order is user-configurable (Settings →
 /// Tab Order); iOS shows the first few at the bottom and folds the rest into
 /// the automatic "More" tab.
-enum AppTab: String, CaseIterable, Identifiable, Sendable {
+enum AppTab: String, CaseIterable, Identifiable, Sendable, Codable {
     case albums, artists, songs, folders
     case home = "search"   // formerly "Search"; rawValue kept so saved tab orders migrate
     case history, settings

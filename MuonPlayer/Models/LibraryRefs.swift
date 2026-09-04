@@ -1,7 +1,7 @@
 import Foundation
 
 /// A navigable reference to an artist (album-artist), used as a navigation value.
-struct ArtistRef: Hashable, Identifiable {
+struct ArtistRef: Hashable, Identifiable, Codable {
     let name: String
     var id: String { name }
 }
@@ -22,13 +22,13 @@ struct SearchResults {
 /// Navigation value for an album opened from one of its songs: the album screen
 /// scrolls that track into view. Plain `Album` remains the value for opening an
 /// album at the top, so the two are separate destinations.
-struct AlbumRef: Hashable {
+struct AlbumRef: Hashable, Codable {
     let album: Album
     let focusPath: String
 }
 
 /// Navigation value for drilling into a subfolder of the library.
-struct FolderRef: Hashable, Identifiable {
+struct FolderRef: Hashable, Identifiable, Codable {
     let url: URL
     var id: String { url.path }
 }
