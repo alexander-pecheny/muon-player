@@ -185,7 +185,7 @@ string literals are readable in the shipped binary. The login self-test takes
 `MUON_LOGIN_TEST_USER`/`MUON_LOGIN_TEST_PASSWORD` from the environment for that
 reason.
 
-### Tabs (macOS)
+### Tabs
 
 A tab is a whole browsing context — `BrowseTab` in `MuonPlayerMac/MacRouter.swift` owns the
 sidebar section, the search query and a navigation path per section, so the sidebar changes
@@ -205,6 +205,15 @@ is only one tab left, the same trick `SpaceKeyMonitor` uses.
 A tab names itself after the page it shows. `NavigationPath` will not say what is in it, so
 each destination reports its own name with `.tabTitle(_:)` and the path binding truncates
 that trail on a pop.
+
+On **iOS** the same `BrowseContext` sits under `TabRouter`, and the bottom bar picks the slot
+within the active context exactly as the macOS sidebar does — so every context keeps its own
+stack per tab and nothing about the one-context app changed. There is no strip: a fourth
+horizontal band under the navigation bar, the tab bar and the mini player is more than the
+screen has. Tabs are invisible until you make one (long-press → Open in New Tab, which opens
+behind you), at which point a count button appears in the navigation bar and opens
+`TabSwitcherView` — cards, tap to switch, × to close. Close the last extra tab and the button
+goes away again. iOS does not restore tabs across launches; macOS does.
 
 ### When the library rescans
 

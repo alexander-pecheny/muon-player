@@ -5,41 +5,140 @@ import Observation
 /// our own overflow tab, replacing the system "More" tab (whose extra
 /// UINavigationController is what produced the doubled navigation bar / back
 /// button on folded-in screens).
-enum TabSelection: Hashable {
+enum TabSelection: Hashable, BrowseSlot {
     case tab(AppTab)
     case more
+
+    var defaultTitle: String {
+        switch self {
+        case .tab(let t): return t.title
+        case .more: return "More"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .tab(let t): return t.systemImage
+        case .more: return "ellipsis"
+        }
+    }
 }
 
-/// Owns the selected tab and each slot's navigation path, so navigation can be
-/// driven from outside a tab's own view tree — e.g. deep-linking to an artist or
-/// album from the Now Playing sheet, which is presented above the whole TabView
-/// and therefore can't reach any single tab's NavigationStack directly.
+/// Owns the open browsing contexts, the selected tab within the active one, and
+/// each slot's navigation path — so navigation can be driven from outside a tab's
+/// own view tree, e.g. deep-linking to an artist or album from the Now Playing
+/// sheet, which is presented above the whole TabView.
+///
+/// The bottom bar picks the slot *within* the active context, exactly as the
+/// macOS sidebar does. Every context therefore keeps its own stack per slot, so
+/// nothing about the one-context app changes until a second context exists.
 @MainActor
 @Observable
 final class TabRouter {
-    var selection: TabSelection = .tab(.albums)
-    private var paths: [TabSelection: NavigationPath] = [:]
+    typealias Context = BrowseContext<TabSelection>
+
+    private(set) var contexts: [Context]
+    private(set) var activeID: Context.ID
+
+    /// Raised by the tab-count button; ContentView presents the switcher above
+    /// the whole TabView, the way it presents Now Playing.
+    var showSwitcher = false
+
+    init() {
+        let first = Context(slot: .tab(.albums))
+        contexts = [first]
+        activeID = first.id
+    }
+
+    var active: Context { contexts.first { $0.id == activeID } ?? contexts[0] }
+
+    var selection: TabSelection {
+        get { active.slot }
+        set { active.slot = newValue }
+    }
 
     func path(for slot: TabSelection) -> Binding<NavigationPath> {
         Binding(
-            get: { self.paths[slot] ?? NavigationPath() },
-            set: { self.paths[slot] = $0 }
+            get: { self.active.paths[slot] ?? NavigationPath() },
+            set: { new in
+                self.active.paths[slot] = new
+                if slot == self.active.slot { self.active.truncateCrumbs(to: new.count) }
+            }
         )
     }
 
-    /// Push a destination onto the currently-selected slot's stack. Every slot
-    /// registers the Album / ArtistRef destinations, so this works from any tab.
-    func push<V: Hashable>(_ value: V) {
-        var p = paths[selection] ?? NavigationPath()
-        p.append(value)
-        paths[selection] = p
+    /// Called by a pushed page to name itself, which is what its tab is called
+    /// while that page is showing.
+    func nameCurrentPage(_ title: String) { active.name(title) }
+
+    // MARK: - Tabs
+
+    func newTab(activate: Bool = true) {
+        let context = Context(slot: active.slot)
+        contexts.insert(context, at: (contexts.firstIndex { $0.id == activeID } ?? contexts.count - 1) + 1)
+        if activate { activeID = context.id }
     }
 
-    func openArtist(_ name: String) { push(ArtistRef(name: name)) }
+    func activate(_ id: Context.ID) {
+        guard contexts.contains(where: { $0.id == id }) else { return }
+        activeID = id
+    }
+
+    @discardableResult
+    func closeTab(_ id: Context.ID) -> Bool {
+        guard contexts.count > 1, let i = contexts.firstIndex(where: { $0.id == id }) else { return false }
+        contexts.remove(at: i)
+        if activeID == id { activeID = contexts[min(i, contexts.count - 1)].id }
+        return true
+    }
+
+    // MARK: - Deep links
+
+    /// Push onto the active context, or into a new one behind it — the long-press
+    /// "Open in New Tab", which stays put and lets the tab-count button be the
+    /// signal that something opened, as Safari does.
+    private func push<V: Hashable>(_ value: V, named title: String, inNewTab: Bool) {
+        let context: Context
+        if inNewTab {
+            context = Context(slot: active.slot)
+            contexts.insert(context, at: (contexts.firstIndex { $0.id == activeID } ?? contexts.count - 1) + 1)
+        } else {
+            context = active
+        }
+        context.push(value, named: title)
+    }
+
+    func openArtist(_ name: String, inNewTab: Bool = false) {
+        push(ArtistRef(name: name), named: name, inNewTab: inNewTab)
+    }
 
     /// `focus` is the path of a track to scroll to — set when the user tapped a
     /// song name rather than an album name.
-    func openAlbum(_ album: Album, focus: String? = nil) {
-        if let focus { push(AlbumRef(album: album, focusPath: focus)) } else { push(album) }
+    func openAlbum(_ album: Album, focus: String? = nil, inNewTab: Bool = false) {
+        if let focus {
+            push(AlbumRef(album: album, focusPath: focus), named: album.title, inNewTab: inNewTab)
+        } else {
+            push(album, named: album.title, inNewTab: inNewTab)
+        }
+    }
+
+    func openFolder(_ url: URL, inNewTab: Bool = false) {
+        push(FolderRef(url: url), named: url.lastPathComponent, inNewTab: inNewTab)
+    }
+}
+
+extension View {
+    /// Name the tab after this page for as long as it is showing.
+    func tabTitle(_ title: String) -> some View {
+        modifier(TabTitle(title: title))
+    }
+}
+
+private struct TabTitle: ViewModifier {
+    @Environment(TabRouter.self) private var router
+    let title: String
+
+    func body(content: Content) -> some View {
+        content.onAppear { router.nameCurrentPage(title) }
     }
 }

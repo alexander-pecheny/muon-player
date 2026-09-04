@@ -1,35 +1,16 @@
 import Observation
 import SwiftUI
 
-/// One tab: a whole browsing context. It owns the sidebar section, the search
-/// query, and a navigation path per section — so switching sections inside a tab
-/// and coming back restores where you were, exactly as the single-window app did.
-@MainActor
-@Observable
-final class BrowseTab: Identifiable {
-    let id = UUID()
-    var section: MacRouter.Section
-    var searchQuery = ""
-
-    fileprivate var paths: [MacRouter.Section: NavigationPath] = [:]
-
-    /// Names of the pages pushed onto the current section's path, so a tab can
-    /// call itself after what it is showing. `NavigationPath` will not say what
-    /// is in it, so the destinations report their own names (`tabTitle`).
-    fileprivate var crumbs: [MacRouter.Section: [String]] = [:]
-
-    init(section: MacRouter.Section) { self.section = section }
-
-    var title: String { crumbs[section]?.last ?? section.title }
-}
+typealias BrowseTab = BrowseContext<MacRouter.Section>
 
 /// The window's tabs, plus the deep links that push onto whichever one is active.
 @MainActor
 @Observable
 final class MacRouter {
-    enum Section: String, CaseIterable, Identifiable {
+    enum Section: String, CaseIterable, Identifiable, BrowseSlot {
         case home, albums, artists, songs, folders, history
         var id: String { rawValue }
+        var defaultTitle: String { title }
 
         var title: String {
             switch self {
@@ -62,7 +43,7 @@ final class MacRouter {
 
     init() {
         let (sections, active) = Self.restored()
-        let restored = sections.map(BrowseTab.init(section:))
+        let restored = sections.map(BrowseTab.init(slot:))
         tabs = restored
         activeID = restored[min(active, restored.count - 1)].id
     }
@@ -74,8 +55,8 @@ final class MacRouter {
     /// The active tab's section. Views and the sidebar bind to this, so they need
     /// to know nothing about tabs.
     var section: Section {
-        get { active.section }
-        set { active.section = newValue; persist() }
+        get { active.slot }
+        set { active.slot = newValue; persist() }
     }
 
     /// The always-visible omni-search query, per tab: it is part of what a tab is
@@ -86,14 +67,11 @@ final class MacRouter {
     }
 
     var path: Binding<NavigationPath> {
-        Binding(get: { self.active.paths[self.active.section] ?? NavigationPath() },
+        Binding(get: { self.active.path },
                 set: { new in
-                    let tab = self.active, section = tab.section
-                    tab.paths[section] = new
+                    self.active.paths[self.active.slot] = new
                     // A pop shortens the trail of names behind the tab's title.
-                    if let names = tab.crumbs[section], names.count > new.count {
-                        tab.crumbs[section] = Array(names.prefix(new.count))
-                    }
+                    self.active.truncateCrumbs(to: new.count)
                 })
     }
 
@@ -104,26 +82,19 @@ final class MacRouter {
 
     /// Called by a pushed page to name itself, which is what the tab is called
     /// while that page is showing.
-    func nameCurrentPage(_ title: String) {
-        let tab = active, section = tab.section
-        var names = tab.crumbs[section] ?? []
-        let depth = (tab.paths[section]?.count ?? 0)
-        guard depth > 0 else { return }
-        if names.count < depth { names.append(title) } else { names[depth - 1] = title }
-        tab.crumbs[section] = names
-    }
+    func nameCurrentPage(_ title: String) { active.name(title) }
 
     /// Pop the current section back to its root, so a search typed while drilled
     /// into an album lands on the results rather than staying hidden behind it.
     func popToRoot() {
-        active.paths[active.section] = NavigationPath()
-        active.crumbs[active.section] = []
+        active.paths[active.slot] = NavigationPath()
+        active.crumbs[active.slot] = []
     }
 
     // MARK: - Tabs
 
     func newTab(section: Section? = nil, activate: Bool = true) {
-        let tab = BrowseTab(section: section ?? active.section)
+        let tab = BrowseTab(slot: section ?? active.slot)
         tabs.insert(tab, at: (tabs.firstIndex { $0.id == activeID } ?? tabs.count - 1) + 1)
         if activate { activateTab(tab.id) }
         persist()
@@ -162,18 +133,13 @@ final class MacRouter {
         showQueue = false
         let tab: BrowseTab
         if inNewTab || NSEvent.modifierFlags.contains(.command) {
-            tab = BrowseTab(section: active.section)
+            tab = BrowseTab(slot: active.slot)
             tabs.insert(tab, at: (tabs.firstIndex { $0.id == activeID } ?? tabs.count - 1) + 1)
             persist()
         } else {
             tab = active
         }
-        var p = tab.paths[tab.section] ?? NavigationPath()
-        p.append(value)
-        tab.paths[tab.section] = p
-        var names = tab.crumbs[tab.section] ?? []
-        names.append(title)
-        tab.crumbs[tab.section] = names
+        tab.push(value, named: title)
     }
 
     func openArtist(_ name: String, inNewTab: Bool = false) {
@@ -203,7 +169,7 @@ final class MacRouter {
     private static let activeKey = "browseTabsActive"
 
     private func persist() {
-        UserDefaults.standard.set(tabs.map(\.section.rawValue), forKey: Self.key)
+        UserDefaults.standard.set(tabs.map(\.slot.rawValue), forKey: Self.key)
         UserDefaults.standard.set(tabs.firstIndex { $0.id == activeID } ?? 0, forKey: Self.activeKey)
     }
 

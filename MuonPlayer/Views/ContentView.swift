@@ -21,6 +21,10 @@ struct ContentView: View {
             // tab bar selection, buttons, swipe actions…). See DominantColor.
             .tint(player.accentColor)
             .sheet(isPresented: $showNowPlaying) { NowPlayingView() }
+            .sheet(isPresented: Binding(get: { router.showSwitcher },
+                                        set: { router.showSwitcher = $0 })) {
+                TabSwitcherView()
+            }
             .onAppear {
                 if !didInitSelection {
                     didInitSelection = true
@@ -83,8 +87,12 @@ private struct TabNavStack: View {
         let path = router.path(for: .tab(tab))
         NavigationStack(path: path) {
             TabRootView(tab: tab)
+                .tabCountToolbar()
                 .modifier(CommonDestinations())
         }
+        // A tab is its own browsing context, so switching to one rebuilds the
+        // stack rather than animating the old one into the new path.
+        .id(router.activeID)
         .environment(\.navPath, path)
     }
 }
@@ -105,9 +113,13 @@ private struct MoreTab: View {
                 }
             }
             .navigationTitle("More")
-            .navigationDestination(for: AppTab.self) { TabRootView(tab: $0) }
+            .navigationDestination(for: AppTab.self) {
+                TabRootView(tab: $0).tabCountToolbar()
+            }
+            .tabCountToolbar()
             .modifier(CommonDestinations())
         }
+        .id(router.activeID)
         .environment(\.navPath, path)
     }
 }
@@ -160,10 +172,20 @@ private struct ScanStatusCapsule: View {
 private struct CommonDestinations: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .navigationDestination(for: Album.self) { AlbumDetailView(album: $0) }
-            .navigationDestination(for: AlbumRef.self) { AlbumDetailView(album: $0.album, focusPath: $0.focusPath) }
-            .navigationDestination(for: ArtistRef.self) { ArtistView(artist: $0.name) }
-            .navigationDestination(for: FolderRef.self) { FoldersView(directory: $0.url) }
+            .navigationDestination(for: Album.self) {
+                AlbumDetailView(album: $0).tabTitle($0.title).tabCountToolbar()
+            }
+            .navigationDestination(for: AlbumRef.self) {
+                AlbumDetailView(album: $0.album, focusPath: $0.focusPath)
+                    .tabTitle($0.album.title).tabCountToolbar()
+            }
+            .navigationDestination(for: ArtistRef.self) {
+                ArtistView(artist: $0.name).tabTitle($0.name).tabCountToolbar()
+            }
+            .navigationDestination(for: FolderRef.self) {
+                FoldersView(directory: $0.url)
+                    .tabTitle($0.url.lastPathComponent).tabCountToolbar()
+            }
     }
 }
 
