@@ -137,33 +137,46 @@ private struct ScanFooterView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(LibraryFolders.self) private var folders
 
+    private var scanning: Bool { library.scanPhase != .idle }
+
     var body: some View {
         // Nothing to rescan and nothing to report until a folder is added.
         if !folders.isEmpty {
             VStack(alignment: .leading, spacing: 5) {
                 Divider()
-                if library.scanPhase != .idle {
-                    Text(library.scanPhase.label)
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).monospacedDigit()
-                        .padding(.top, 3)
-                    // Walking the folders has no total, so it gets an indeterminate bar.
-                    if let fraction = library.scanPhase.fraction {
-                        ProgressView(value: fraction)
-                    } else {
-                        ProgressView().progressViewStyle(.linear)
+                // The button keeps its shape while a scan runs — every activation
+                // starts one, and a footer that rearranges itself each time you
+                // ⌘-Tab back is the thing you end up watching.
+                Button { Task { await library.rescanUntilSettled() } } label: {
+                    HStack(spacing: 6) {
+                        icon
+                        Text(scanning ? "Scanning…" : "Rescan Library")
                     }
-                } else {
-                    Button { Task { await library.rescanUntilSettled() } } label: {
-                        Label("Rescan Library", systemImage: "arrow.clockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .controlSize(.large)
-                    .padding(.top, 3)
+                    .frame(maxWidth: .infinity)
                 }
+                .controlSize(.large)
+                .disabled(scanning)
+                .padding(.top, 3)
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 10)
+        }
+    }
+
+    @ViewBuilder private var icon: some View {
+        if scanning {
+            // Walking the folders has no total, so it spins rather than fills.
+            Group {
+                if let fraction = library.scanPhase.fraction {
+                    ProgressView(value: fraction)
+                } else {
+                    ProgressView()
+                }
+            }
+            .progressViewStyle(.circular)
+            .controlSize(.small)
+        } else {
+            Image(systemName: "arrow.clockwise")
         }
     }
 }
