@@ -14,6 +14,13 @@ struct MacRootView: View {
         // it: an inset there is not propagated into the detail column's scroll
         // view, so the last rows of a long list stayed hidden behind the bar.
         VStack(spacing: 0) {
+            // Above the split view, spanning the window, because it cannot live
+            // inside the detail column: anything wrapping or sitting beside that
+            // NavigationStack — a sibling in a VStack, a safeAreaInset — is
+            // dropped the moment the stack pushes, so the strip vanished the
+            // first time you opened an album.
+            if !library.roots.isEmpty { MacTabBar() }
+
             NavigationSplitView {
                 sidebar
             } detail: {
@@ -28,13 +35,23 @@ struct MacRootView: View {
                                 MacSearchResultsView(query: router.searchQuery)
                             }
                         }
-                        .navigationDestination(for: Album.self) { MacAlbumDetailView(album: $0) }
+                        .navigationDestination(for: Album.self) {
+                            MacAlbumDetailView(album: $0).tabTitle($0.title)
+                        }
                         .navigationDestination(for: AlbumRef.self) {
                             MacAlbumDetailView(album: $0.album, focusPath: $0.focusPath)
+                                .tabTitle($0.album.title)
                         }
-                        .navigationDestination(for: ArtistRef.self) { MacArtistView(artist: $0.name) }
-                        .navigationDestination(for: FolderRef.self) { MacFoldersView(directory: $0.url) }
+                        .navigationDestination(for: ArtistRef.self) {
+                            MacArtistView(artist: $0.name).tabTitle($0.name)
+                        }
+                        .navigationDestination(for: FolderRef.self) {
+                            MacFoldersView(directory: $0.url).tabTitle($0.url.lastPathComponent)
+                        }
                     }
+                    // A tab is its own browsing context, so switching to one
+                    // rebuilds the stack rather than animating the old one.
+                    .id(router.activeID)
                 }
             }
             // On the split view, not a detail view: there the field persists across
@@ -59,6 +76,7 @@ struct MacRootView: View {
         }
         .onChange(of: router.searchFocusToken) { searchFocused = true }
         .spaceTogglesPlayback(player)
+        .commandWClosesTab(router)
         .sheet(isPresented: $router.showQueue) { MacQueueView() }
     }
 

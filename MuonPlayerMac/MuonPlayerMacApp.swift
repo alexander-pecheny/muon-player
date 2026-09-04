@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -9,6 +10,10 @@ struct MuonPlayerMacApp: App {
     @State private var router = MacRouter()
 
     init() {
+        // The app has its own tabs; AppKit's window tabbing would put a second,
+        // different set of tab commands in the Window menu.
+        NSWindow.allowsAutomaticWindowTabbing = false
+
         let folders = LibraryFolders()
         // The self-test plays tracks, which records history and queues scrobbles.
         // Keep all of that out of the real library.
@@ -75,7 +80,10 @@ struct MuonCommands: Commands {
     let router: MacRouter
 
     var body: some Commands {
-        CommandGroup(replacing: .newItem) {}
+        CommandGroup(replacing: .newItem) {
+            Button("New Tab") { router.newTab() }
+                .keyboardShortcut("t", modifiers: .command)
+        }
 
         CommandGroup(after: .textEditing) {
             Button("Find") { router.focusSearch() }
@@ -105,6 +113,16 @@ struct MuonCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button("Show Now Playing") { router.showNowPlaying.toggle() }
                 .keyboardShortcut("i", modifiers: [.command, .option])
+        }
+
+        CommandGroup(after: .windowList) {
+            // ⌘9 is the last tab however many there are, as it is in a browser.
+            ForEach(Array(1...9), id: \.self) { n in
+                Button("Tab \(n)") {
+                    router.selectTab(at: n == 9 ? router.tabs.count - 1 : n - 1)
+                }
+                .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
+            }
         }
 
         CommandMenu("Library") {

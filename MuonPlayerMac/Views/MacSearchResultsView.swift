@@ -4,6 +4,7 @@ import SwiftUI
 /// library. Shown in place of the current section whenever the toolbar search
 /// field holds a query (see `MacRootView`).
 struct MacSearchResultsView: View {
+    @Environment(MacRouter.self) private var router
     let query: String
 
     @Environment(LibraryStore.self) private var library
@@ -45,6 +46,10 @@ struct MacSearchResultsView: View {
                                 Text(artist.name)
                             }
                         }
+                        .commandClickOpens { router.openArtist(artist.name) }
+                        .contextMenu {
+                            Button("Open in New Tab") { router.openArtist(artist.name, inNewTab: true) }
+                        }
                     }
                 }
             }
@@ -60,6 +65,10 @@ struct MacSearchResultsView: View {
                                     Text(album.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }
+                        }
+                        .commandClickOpens { router.openAlbum(album) }
+                        .contextMenu {
+                            Button("Open in New Tab") { router.openAlbum(album, inNewTab: true) }
                         }
                     }
                 }

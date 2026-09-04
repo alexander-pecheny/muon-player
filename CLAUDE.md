@@ -185,6 +185,27 @@ string literals are readable in the shipped binary. The login self-test takes
 `MUON_LOGIN_TEST_USER`/`MUON_LOGIN_TEST_PASSWORD` from the environment for that
 reason.
 
+### Tabs (macOS)
+
+A tab is a whole browsing context — `BrowseTab` in `MuonPlayerMac/MacRouter.swift` owns the
+sidebar section, the search query and a navigation path per section, so the sidebar changes
+the active tab rather than the window. ⌘T and the + open one, ⌘1…⌘9 select (⌘9 is the last),
+⌘-click or the context menu opens a link in a background tab, and the × or ⌘W closes one.
+Open sections are restored on launch; navigation history is not, since `NavigationPath`
+holds arbitrary values, so a tab comes back at its section root.
+
+Two traps. The strip sits **above** the `NavigationSplitView`, spanning the window, and not
+in the detail column where it belongs visually: anything wrapping or beside that column's
+`NavigationStack` — a sibling in a `VStack`, a `safeAreaInset` — is dropped the moment the
+stack pushes, so the strip disappeared the first time you opened an album. And ⌘W cannot be
+a `.keyboardShortcut`, because File → Close already owns it and AppKit resolves that first;
+`CloseTabKeyMonitor` takes the key from a local event monitor and hands it back when there
+is only one tab left, the same trick `SpaceKeyMonitor` uses.
+
+A tab names itself after the page it shows. `NavigationPath` will not say what is in it, so
+each destination reports its own name with `.tabTitle(_:)` and the path binding truncates
+that trail on a pop.
+
 ### When the library rescans
 
 At launch, on any Rescan button, and **whenever the app comes to the front** —
