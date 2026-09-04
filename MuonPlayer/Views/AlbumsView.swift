@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AlbumsView: View {
+    @Environment(TabRouter.self) private var router
     @Environment(LibraryStore.self) private var library
     @Environment(\.navPath) private var navPath
     @State private var query = ""
@@ -29,6 +30,9 @@ struct AlbumsView: View {
                         // A cell's tap already opens the album, so the artist link
                         // has to live in the long-press menu.
                         .contextMenu {
+                            Button { router.openAlbum(album, inNewTab: true) } label: {
+                                Label("Open in New Tab", systemImage: "square.on.square")
+                            }
                             Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
                                 Label("Go to Artist", systemImage: "music.mic")
                             }

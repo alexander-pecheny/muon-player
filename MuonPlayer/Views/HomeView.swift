@@ -5,6 +5,7 @@ import SwiftUI
 /// albums, and songs; when the query is empty it shows the latest additions to
 /// the library instead.
 struct HomeView: View {
+    @Environment(TabRouter.self) private var router
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @State private var query = ""
@@ -18,6 +19,9 @@ struct HomeView: View {
     /// A grid cell already navigates to its album on tap, so the artist link has
     /// to live in the long-press menu.
     @ViewBuilder private func goToArtist(_ album: Album) -> some View {
+        Button { router.openAlbum(album, inNewTab: true) } label: {
+            Label("Open in New Tab", systemImage: "square.on.square")
+        }
         Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
