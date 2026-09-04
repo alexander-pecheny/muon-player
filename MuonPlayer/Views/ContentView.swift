@@ -169,21 +169,32 @@ private struct ScanStatusCapsule: View {
 
 /// Value-based destinations registered once per navigation stack.
 private struct CommonDestinations: ViewModifier {
+    @Environment(LibraryStore.self) private var library
+
+    /// An artist has no art of its own; the app shows one of their covers, and
+    /// the tab card follows suit.
+    private func artistArtwork(_ name: String) -> String? {
+        library.albums.first { $0.artist == name && $0.artworkPath != nil }?.artworkPath
+    }
+
     func body(content: Content) -> some View {
         content
             .navigationDestination(for: Album.self) {
-                AlbumDetailView(album: $0).tabTitle($0.title, artwork: $0.artworkPath).tabCountToolbar()
+                AlbumDetailView(album: $0).tabTitle($0.title, kind: .album, artwork: $0.artworkPath).tabCountToolbar()
             }
             .navigationDestination(for: AlbumRef.self) {
                 AlbumDetailView(album: $0.album, focusPath: $0.focusPath)
-                    .tabTitle($0.album.title, artwork: $0.album.artworkPath).tabCountToolbar()
+                    .tabTitle($0.album.title, kind: .album, artwork: $0.album.artworkPath)
+                    .tabCountToolbar()
             }
             .navigationDestination(for: ArtistRef.self) {
-                ArtistView(artist: $0.name).tabTitle($0.name).tabCountToolbar()
+                ArtistView(artist: $0.name)
+                    .tabTitle($0.name, kind: .artist, artwork: artistArtwork($0.name))
+                    .tabCountToolbar()
             }
             .navigationDestination(for: FolderRef.self) {
                 FoldersView(directory: $0.url)
-                    .tabTitle($0.url.lastPathComponent).tabCountToolbar()
+                    .tabTitle($0.url.lastPathComponent, kind: .folder).tabCountToolbar()
             }
     }
 }

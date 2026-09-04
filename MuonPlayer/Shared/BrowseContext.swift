@@ -1,6 +1,24 @@
 import Observation
 import SwiftUI
 
+/// What kind of page a tab is showing, which is what its card calls itself
+/// under the page's own name.
+enum PageKind {
+    case album, artist, folder
+    /// A section shown as a page rather than as a bottom-bar slot — Home, when it
+    /// has been reordered into the overflow. Its name already says what it is.
+    case section
+
+    var label: String? {
+        switch self {
+        case .album: return "Album"
+        case .artist: return "Artist"
+        case .folder: return "Folder"
+        case .section: return nil
+        }
+    }
+}
+
 /// A slot a browsing context can be parked in — a sidebar section on macOS, a
 /// bottom-bar tab on iOS.
 protocol BrowseSlot: Hashable {
@@ -28,6 +46,7 @@ final class BrowseContext<Slot: BrowseSlot>: Identifiable {
     /// destinations report themselves (`tabTitle`).
     struct Crumb {
         let name: String
+        let kind: PageKind
         let artworkPath: String?
     }
 
@@ -36,16 +55,17 @@ final class BrowseContext<Slot: BrowseSlot>: Identifiable {
     init(slot: Slot) { self.slot = slot }
 
     var title: String { crumbs[slot]?.last?.name ?? slot.defaultTitle }
+    var kind: PageKind? { crumbs[slot]?.last?.kind }
     var artworkPath: String? { crumbs[slot]?.last?.artworkPath }
 
     var path: NavigationPath { paths[slot] ?? NavigationPath() }
 
     /// Record the page now on top, and drop crumbs left behind by a pop.
-    func name(_ title: String, artwork: String? = nil) {
+    func name(_ title: String, kind: PageKind, artwork: String? = nil) {
         var names = crumbs[slot] ?? []
         let depth = path.count
         guard depth > 0 else { return }
-        let crumb = Crumb(name: title, artworkPath: artwork)
+        let crumb = Crumb(name: title, kind: kind, artworkPath: artwork)
         if names.count < depth { names.append(crumb) } else { names[depth - 1] = crumb }
         crumbs[slot] = names
     }
@@ -56,10 +76,10 @@ final class BrowseContext<Slot: BrowseSlot>: Identifiable {
         }
     }
 
-    func push<V: Hashable>(_ value: V, named title: String, artwork: String? = nil) {
+    func push<V: Hashable>(_ value: V, named title: String, kind: PageKind, artwork: String? = nil) {
         var p = paths[slot] ?? NavigationPath()
         p.append(value)
         paths[slot] = p
-        crumbs[slot] = (crumbs[slot] ?? []) + [Crumb(name: title, artworkPath: artwork)]
+        crumbs[slot] = (crumbs[slot] ?? []) + [Crumb(name: title, kind: kind, artworkPath: artwork)]
     }
 }

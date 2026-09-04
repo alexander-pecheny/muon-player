@@ -69,11 +69,8 @@ struct TabSwitcherView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(context.title).font(.subheadline).lineLimit(1)
-                    // The slot is worth saying only when the page has its own
-                    // name, or the card would read "Albums" twice.
-                    if context.title != context.slot.defaultTitle {
-                        Text(context.slot.defaultTitle)
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if let kind = context.kind?.label {
+                        Text(kind).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

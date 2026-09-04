@@ -82,8 +82,8 @@ final class MacRouter {
 
     /// Called by a pushed page to name itself, which is what the tab is called
     /// while that page is showing.
-    func nameCurrentPage(_ title: String, artwork: String? = nil) {
-        active.name(title, artwork: artwork)
+    func nameCurrentPage(_ title: String, kind: PageKind, artwork: String? = nil) {
+        active.name(title, kind: kind, artwork: artwork)
     }
 
     /// Pop the current section back to its root, so a search typed while drilled
@@ -131,7 +131,7 @@ final class MacRouter {
     /// ⌘-click opens in a background tab, as it does in a browser. Reading the
     /// modifier here rather than at each call site is what makes that true of
     /// every way into an album — the grid, search results, the player bar.
-    private func push<V: Hashable>(_ value: V, named title: String,
+    private func push<V: Hashable>(_ value: V, named title: String, kind: PageKind,
                                    artwork: String? = nil, inNewTab: Bool = false) {
         showQueue = false
         let tab: BrowseTab
@@ -142,26 +142,27 @@ final class MacRouter {
         } else {
             tab = active
         }
-        tab.push(value, named: title, artwork: artwork)
+        tab.push(value, named: title, kind: kind, artwork: artwork)
     }
 
     func openArtist(_ name: String, inNewTab: Bool = false) {
-        push(ArtistRef(name: name), named: name, inNewTab: inNewTab)
+        push(ArtistRef(name: name), named: name, kind: .artist, inNewTab: inNewTab)
     }
 
     /// `focus` is the path of a track to scroll to — set when the user clicked a
     /// song name rather than an album name.
     func openAlbum(_ album: Album, focus: String? = nil, inNewTab: Bool = false) {
         if let focus {
-            push(AlbumRef(album: album, focusPath: focus), named: album.title,
+            push(AlbumRef(album: album, focusPath: focus), named: album.title, kind: .album,
                  artwork: album.artworkPath, inNewTab: inNewTab)
         } else {
-            push(album, named: album.title, artwork: album.artworkPath, inNewTab: inNewTab)
+            push(album, named: album.title, kind: .album,
+                 artwork: album.artworkPath, inNewTab: inNewTab)
         }
     }
 
     func openFolder(_ url: URL, inNewTab: Bool = false) {
-        push(FolderRef(url: url), named: url.lastPathComponent, inNewTab: inNewTab)
+        push(FolderRef(url: url), named: url.lastPathComponent, kind: .folder, inNewTab: inNewTab)
     }
 
     // MARK: - Persistence
@@ -187,17 +188,18 @@ final class MacRouter {
 
 extension View {
     /// Name the tab after this page for as long as it is showing.
-    func tabTitle(_ title: String, artwork: String? = nil) -> some View {
-        modifier(TabTitle(title: title, artwork: artwork))
+    func tabTitle(_ title: String, kind: PageKind, artwork: String? = nil) -> some View {
+        modifier(TabTitle(title: title, kind: kind, artwork: artwork))
     }
 }
 
 private struct TabTitle: ViewModifier {
     @Environment(MacRouter.self) private var router
     let title: String
+    let kind: PageKind
     let artwork: String?
 
     func body(content: Content) -> some View {
-        content.onAppear { router.nameCurrentPage(title, artwork: artwork) }
+        content.onAppear { router.nameCurrentPage(title, kind: kind, artwork: artwork) }
     }
 }
