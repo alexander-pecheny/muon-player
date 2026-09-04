@@ -20,13 +20,19 @@ final class LibraryFolders {
     var isEmpty: Bool { roots.isEmpty }
 
     init() {
-        // `bookmarks[i]` must describe `roots[i]`, so a bookmark that no longer
-        // resolves (folder deleted, volume gone) is dropped from both.
+        // `bookmarks[i]` must describe `roots[i]`, so a bookmark that yields
+        // nothing at all is dropped from both.
         let stored = UserDefaults.standard.array(forKey: Self.key) as? [Data] ?? []
         var kept: [(Data, LibraryRoot)] = []
         for data in stored {
-            guard let (url, refreshed) = Self.resolve(data) else { continue }
-            kept.append((refreshed ?? data, LibraryRoot(url)))
+            if let (url, refreshed) = Self.resolve(data) {
+                kept.append((refreshed ?? data, LibraryRoot(url)))
+            } else if let path = URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: data)?.path {
+                // The volume is not mounted. Keep the bookmark — dropping it loses
+                // the folder for good — and still hand the store a root, which it
+                // will find unreadable and so decline to prune.
+                kept.append((data, LibraryRoot(URL(fileURLWithPath: path))))
+            }
         }
         bookmarks = kept.map(\.0)
         roots = kept.map(\.1)

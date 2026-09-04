@@ -185,6 +185,25 @@ string literals are readable in the shipped binary. The login self-test takes
 `MUON_LOGIN_TEST_USER`/`MUON_LOGIN_TEST_PASSWORD` from the environment for that
 reason.
 
+### When the library rescans
+
+At launch, on any Rescan button, and **whenever the app comes to the front** —
+`scenePhase` on iOS, `NSApplication.didBecomeActiveNotification` on macOS. Music is
+added while the app is behind something else, so returning to it is the moment to
+look.
+
+An activation pass that found changes schedules another five seconds later and keeps
+going until one finds nothing (`LibraryStore.rescanUntilSettled`): a Finder copy still
+in flight would otherwise leave half an album indexed, and its files re-read on the
+next pass anyway once their mtimes settle. A pass that changed nothing skips
+`loadFromDatabase` entirely — the grouping query over 13k tracks and the view rebuild
+behind it are what a no-op scan must not cost.
+
+A root the sandbox cannot read is dropped before the walk and left out of the prune.
+Without that, an unmounted drive walks as empty and an unscoped prune deletes every
+track on it; `LibraryFolders` likewise keeps a bookmark that failed to resolve rather
+than forgetting the folder for good.
+
 ## Library maintenance
 
 `scripts/muon-dedup.swift` removes redundant copies of an album, keeping the

@@ -45,7 +45,7 @@ struct AlbumsView: View {
                     ProgressView()
                 } else {
                     Button {
-                        Task { await library.rescan() }
+                        Task { await library.rescanUntilSettled() }
                     } label: { Image(systemName: "arrow.clockwise") }
                 }
             }
@@ -58,7 +58,7 @@ struct AlbumsView: View {
         } description: {
             Text("Add audio files to **On My iPhone → MuonPlayer** in the Files app, then pull to refresh.")
         } actions: {
-            Button("Rescan") { Task { await library.rescan() } }
+            Button("Rescan") { Task { await library.rescanUntilSettled() } }
         }
         .padding(.top, 80)
     }

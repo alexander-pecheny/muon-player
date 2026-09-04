@@ -8,6 +8,7 @@ struct MuonPlayerApp: App {
     @State private var scrobbler: ScrobbleService
     @State private var tabSettings = TabSettings()
     @State private var router = TabRouter()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         Self.configureAudioSession()
@@ -31,6 +32,12 @@ struct MuonPlayerApp: App {
                 .environment(scrobbler)
                 .environment(tabSettings)
                 .environment(router)
+                // Music arrives through the Files app, which means it arrives while
+                // this app is in the background. Coming back to the front is the
+                // moment to look.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { library.rescanOnActivation() }
+                }
                 .task {
                     // Let the playhead reach the library for artist-folder order.
                     player.library = library
