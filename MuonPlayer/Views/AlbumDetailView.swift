@@ -17,6 +17,7 @@ struct AlbumDetailView: View {
     // album never gets tinted by a green now-playing track (and vice versa).
     @State private var albumAccent: Color = .neutralAccent
     @Environment(\.navPath) private var navPath
+    @State private var pendingDelete: PendingDelete?
 
     init(album: Album, focusPath: String? = nil) {
         _album = State(initialValue: album)
@@ -118,6 +119,7 @@ struct AlbumDetailView: View {
                 .tint(albumAccent)
             }
         }
+        .deleteConfirmation($pendingDelete)
         .sheet(isPresented: $editingAlbum) { TagEditView(scope: .album(album)) }
         .sheet(item: $editingTrack) { t in TagEditView(scope: .track(t)) }
         .overlay {
@@ -169,6 +171,17 @@ struct AlbumDetailView: View {
         }
         Button { editingAlbum = true } label: {
             Label("Edit Tags", systemImage: "tag")
+        }
+        Button(role: .destructive) {
+            pendingDelete = PendingDelete(
+                title: "Delete “\(album.title)”?",
+                message: "\(tracks.count) track\(tracks.count == 1 ? "" : "s") will be removed from this iPhone."
+            ) { [tracks] in
+                await library.delete(tracks: tracks)
+                if let path = navPath, !path.wrappedValue.isEmpty { path.wrappedValue.removeLast() }
+            }
+        } label: {
+            Label("Delete Album", systemImage: "trash")
         }
     }
 

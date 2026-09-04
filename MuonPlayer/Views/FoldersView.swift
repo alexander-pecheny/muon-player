@@ -8,6 +8,7 @@ struct FoldersView: View {
 
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
+    @State private var pendingDelete: PendingDelete?
     @State private var subfolders: [URL] = []
     @State private var trackFiles: [Track] = []
     @State private var loaded = false
@@ -31,6 +32,19 @@ struct FoldersView: View {
                     ForEach(shownFolders, id: \.path) { folder in
                         NavigationLink(value: FolderRef(url: folder)) {
                             Label(folder.lastPathComponent, systemImage: "folder")
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                pendingDelete = PendingDelete(
+                                    title: "Delete “\(folder.lastPathComponent)”?",
+                                    message: "The folder and everything inside it will be removed from this iPhone."
+                                ) {
+                                    await library.delete(folder: folder)
+                                    await load()
+                                }
+                            } label: {
+                                Label("Delete Folder", systemImage: "trash")
+                            }
                         }
                     }
                 }
@@ -57,6 +71,7 @@ struct FoldersView: View {
             }
         }
         .listStyle(.plain)
+        .deleteConfirmation($pendingDelete)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter this folder")
         .navigationTitle(directory == nil ? "Folders" : dir.lastPathComponent)
         .navigationBarTitleDisplayMode(directory == nil ? .large : .inline)

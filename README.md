@@ -90,6 +90,9 @@ credentials — scrobbling is simply disabled.
 **iOS** — import audio files via the Files app under **On My iPhone →
 MuonPlayer**, then **Settings → Rescan Library**.
 
+To remove music from the phone, long-press an album, artist or folder and choose
+Delete.
+
 **macOS** — **Library → Add Folder to Library…** (⌘O), and point it at any folder
 on disk. The app is sandboxed, so it can only read folders you have picked this
 way; each one is remembered as a security-scoped bookmark.

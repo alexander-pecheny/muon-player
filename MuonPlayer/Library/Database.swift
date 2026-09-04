@@ -290,6 +290,37 @@ actor Database {
         return removed
     }
 
+    /// Forget these exact tracks, after their files have been deleted. Distinct from
+    /// `pruneMissing`, which infers what to forget from a walk of the disk: here the
+    /// caller already knows, and the folder it walked may no longer exist.
+    @discardableResult
+    func deleteTracks(paths: [String]) -> Int {
+        var removed = 0
+        for path in paths {
+            guard let stmt = prepare("DELETE FROM tracks WHERE path = ?") else { continue }
+            bindText(stmt, 1, path)
+            if sqlite3_step(stmt) == SQLITE_DONE { removed += Int(sqlite3_changes(db)) }
+            sqlite3_finalize(stmt)
+        }
+        return removed
+    }
+
+    /// Forget everything under a deleted folder.
+    ///
+    /// A prefix match as a range, not `LIKE`: a real folder name may contain `%` or
+    /// `_`, and the range needs no escaping. The upper bound is "0" because it is the
+    /// byte after "/", and the default collation compares bytes.
+    @discardableResult
+    func deleteTracks(underFolder folder: String) -> Int {
+        guard let stmt = prepare("DELETE FROM tracks WHERE path >= ? AND path < ?") else { return 0 }
+        bindText(stmt, 1, folder + "/")
+        bindText(stmt, 2, folder + "0")
+        var removed = 0
+        if sqlite3_step(stmt) == SQLITE_DONE { removed = Int(sqlite3_changes(db)) }
+        sqlite3_finalize(stmt)
+        return removed
+    }
+
     /// Rewrite stored track paths whose container prefix no longer matches the
     /// current Documents directory. The data-container UUID changes on every
     /// (re)install/update, which otherwise makes every absolute path stale —

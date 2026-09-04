@@ -4,6 +4,7 @@ import SwiftUI
 struct ArtistsView: View {
     @Environment(LibraryStore.self) private var library
     @State private var query = ""
+    @State private var pendingDelete: PendingDelete?
 
     private struct ArtistSummary: Identifiable {
         let name: String
@@ -40,8 +41,21 @@ struct ArtistsView: View {
                             .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                     }
                 }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        pendingDelete = PendingDelete(
+                            title: "Delete everything by “\(artist.name)”?",
+                            message: "\(artist.albumCount) album\(artist.albumCount == 1 ? "" : "s") will be removed from this iPhone."
+                        ) {
+                            await library.delete(tracks: await library.tracks(byArtist: artist.name))
+                        }
+                    } label: {
+                        Label("Delete Artist", systemImage: "trash")
+                    }
+                }
             }
         }
+        .deleteConfirmation($pendingDelete)
         .listStyle(.plain)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter artists")
         .overlay {

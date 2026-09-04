@@ -4,6 +4,7 @@ struct AlbumsView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.navPath) private var navPath
     @State private var query = ""
+    @State private var pendingDelete: PendingDelete?
 
     private let columns = [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)]
 
@@ -32,12 +33,16 @@ struct AlbumsView: View {
                             Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
                                 Label("Go to Artist", systemImage: "music.mic")
                             }
+                            Button(role: .destructive) { pendingDelete = delete(album) } label: {
+                                Label("Delete Album", systemImage: "trash")
+                            }
                         }
                     }
                 }
                 .padding()
             }
         }
+        .deleteConfirmation($pendingDelete)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter albums")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -61,6 +66,17 @@ struct AlbumsView: View {
             Button("Rescan") { Task { await library.rescanUntilSettled() } }
         }
         .padding(.top, 80)
+    }
+}
+
+extension AlbumsView {
+    func delete(_ album: Album) -> PendingDelete {
+        PendingDelete(
+            title: "Delete “\(album.title)”?",
+            message: "\(album.trackCount) track\(album.trackCount == 1 ? "" : "s") will be removed from this iPhone."
+        ) {
+            await library.delete(tracks: await library.tracks(in: album))
+        }
     }
 }
 

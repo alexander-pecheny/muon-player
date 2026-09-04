@@ -201,6 +201,57 @@ final class LibraryStore {
         await scan(folders: folders, pruneScope: folders, forceReadAll: true)
     }
 
+    // MARK: - Deleting
+
+    /// Delete these tracks' files and forget them.
+    ///
+    /// A folder left holding no music goes too, and so does its parent if that empties
+    /// in turn, up to but never including a library root. Otherwise a deleted album
+    /// leaves its cover art and its folder behind, still listed in the Folders browser.
+    @discardableResult
+    func delete(tracks: [Track]) async -> Int {
+        // Canonical paths first: `canonicalPath` asks the filesystem, and after the
+        // delete there is nothing left to ask about.
+        let paths = tracks.map { LibraryRoot.canonicalPath(of: $0.url) }
+        let folders = Set(tracks.map { $0.url.deletingLastPathComponent() })
+        for track in tracks { try? FileManager.default.removeItem(at: track.url) }
+        for folder in folders { removeAudiolessFolders(from: folder) }
+        let removed = await database.deleteTracks(paths: paths)
+        await loadFromDatabase()
+        return removed
+    }
+
+    /// Delete a whole folder — what the Folders browser offers. A library root itself
+    /// is refused: removing it would delete the library rather than something in it.
+    @discardableResult
+    func delete(folder: URL) async -> Int {
+        let path = LibraryRoot.canonicalPath(of: folder)
+        guard root(containing: path) != nil else { return 0 }
+        try? FileManager.default.removeItem(at: folder)
+        removeAudiolessFolders(from: folder.deletingLastPathComponent())
+        let removed = await database.deleteTracks(underFolder: path)
+        await loadFromDatabase()
+        return removed
+    }
+
+    private func removeAudiolessFolders(from folder: URL) {
+        var current = folder
+        while root(containing: LibraryRoot.canonicalPath(of: current)) != nil, !containsAudio(current) {
+            try? FileManager.default.removeItem(at: current)
+            current = current.deletingLastPathComponent()
+        }
+    }
+
+    private func containsAudio(_ folder: URL) -> Bool {
+        guard let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else {
+            return true
+        }
+        while let file = walker.nextObject() as? URL {
+            if AudioFormat.supportedExtensions.contains(file.pathExtension.lowercased()) { return true }
+        }
+        return false
+    }
+
     /// Returns whether the library changed — files read, or rows pruned.
     @discardableResult
     private func scan(folders: [URL], pruneScope: [URL]?, forceReadAll: Bool) async -> Bool {

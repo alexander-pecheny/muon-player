@@ -244,6 +244,21 @@ Without that, an unmounted drive walks as empty and an unscoped prune deletes ev
 track on it; `LibraryFolders` likewise keeps a bookmark that failed to resolve rather
 than forgetting the folder for good.
 
+### Deleting from the phone
+
+Long-press an album, an artist or a folder on iOS → Delete. `LibraryStore.delete(tracks:)`
+and `delete(folder:)` remove the files and the rows; a library root is refused, since
+deleting it would delete the library rather than something in it.
+
+A folder left holding no music goes with the album, and so does its parent if that empties
+in turn — otherwise a deleted album leaves its cover art and an empty folder behind, still
+listed in the Folders browser. The phone has no Trash, so the confirmation is the only
+safety there is, which is why nothing here is a swipe that acts immediately.
+
+`Database.deleteTracks(underFolder:)` matches the prefix as a **range** (`path >= f."/"`
+and `path < f."0"`, "0" being the byte after "/") rather than with `LIKE`: a real folder
+name may well contain `%` or `_`.
+
 ## Library maintenance
 
 `scripts/muon-dedup.swift` removes redundant copies of an album, keeping the
