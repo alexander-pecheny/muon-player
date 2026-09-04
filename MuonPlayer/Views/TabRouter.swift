@@ -25,15 +25,15 @@ enum TabSelection: Hashable, BrowseSlot {
 
     /// `AppTab.more` does not exist, and no `AppTab` rawValue is "more" (Home's
     /// is "search"), so the two cases cannot collide in UserDefaults.
-    var rawValue: String {
+    var storageKey: String {
         switch self {
         case .tab(let t): return t.rawValue
         case .more: return "more"
         }
     }
 
-    init(rawValue: String) {
-        self = AppTab(rawValue: rawValue).map(TabSelection.tab) ?? .more
+    init?(storageKey: String) {
+        self = AppTab(rawValue: storageKey).map(TabSelection.tab) ?? .more
     }
 }
 
@@ -62,11 +62,10 @@ final class TabRouter {
     let restored: Bool
 
     init() {
-        let saved = (UserDefaults.standard.array(forKey: Self.key) as? [String] ?? [])
-            .map(TabSelection.init(rawValue:))
+        let saved = (UserDefaults.standard.array(forKey: Self.key) as? [Data] ?? [])
+            .compactMap(Context.init(snapshot:))
         restored = !saved.isEmpty
-        let slots = saved.isEmpty ? [TabSelection.tab(.albums)] : saved
-        let open = slots.map(Context.init(slot:))
+        let open = saved.isEmpty ? [Context(slot: .tab(.albums))] : saved
         contexts = open
         activeID = open[min(max(0, UserDefaults.standard.integer(forKey: Self.activeKey)), open.count - 1)].id
     }
@@ -84,6 +83,7 @@ final class TabRouter {
             set: { new in
                 self.active.paths[slot] = new
                 if slot == self.active.slot { self.active.truncateCrumbs(to: new.count) }
+                self.persist()
             }
         )
     }
@@ -92,6 +92,7 @@ final class TabRouter {
     /// while that page is showing.
     func nameCurrentPage(_ title: String, kind: PageKind, artwork: String? = nil) {
         active.name(title, kind: kind, artwork: artwork)
+        persist()
     }
 
     // MARK: - Tabs
@@ -127,18 +128,17 @@ final class TabRouter {
     /// the More tab, or the TabView would be told to select a tag it has not got.
     func reconcileSlots(with settings: TabSettings) {
         for context in contexts { context.slot = settings.reachable(context.slot) }
+        persist()
     }
 
     // MARK: - Persistence
 
-    /// Which slots were open, and which tab was in front. Navigation history is
-    /// not restorable — `NavigationPath` holds arbitrary values — so a tab comes
-    /// back at its slot's root.
-    private static let key = "iosTabs"
+    /// The open tabs, each with the stack behind it, and which was in front.
+    private static let key = "iosTabSnapshots"
     private static let activeKey = "iosTabsActive"
 
     private func persist() {
-        UserDefaults.standard.set(contexts.map(\.slot.rawValue), forKey: Self.key)
+        UserDefaults.standard.set(contexts.compactMap { $0.snapshot() }, forKey: Self.key)
         UserDefaults.standard.set(contexts.firstIndex { $0.id == activeID } ?? 0, forKey: Self.activeKey)
     }
 
@@ -146,6 +146,7 @@ final class TabRouter {
 
     func openArtist(_ name: String, artwork: String? = nil) {
         active.push(ArtistRef(name: name), named: name, kind: .artist, artwork: artwork)
+        persist()
     }
 
     /// `focus` is the path of a track to scroll to — set when the user tapped a
@@ -157,10 +158,12 @@ final class TabRouter {
         } else {
             active.push(album, named: album.title, kind: .album, artwork: album.artworkPath)
         }
+        persist()
     }
 
     func openFolder(_ url: URL) {
         active.push(FolderRef(url: url), named: url.lastPathComponent, kind: .folder)
+        persist()
     }
 }
 
