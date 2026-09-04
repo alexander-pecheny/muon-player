@@ -90,8 +90,8 @@ final class TabRouter {
 
     /// Called by a pushed page to name itself, which is what its tab is called
     /// while that page is showing.
-    func nameCurrentPage(_ title: String, artwork: String? = nil) {
-        active.name(title, artwork: artwork)
+    func nameCurrentPage(_ title: String, kind: PageKind, artwork: String? = nil) {
+        active.name(title, kind: kind, artwork: artwork)
     }
 
     // MARK: - Tabs
@@ -102,7 +102,7 @@ final class TabRouter {
     func newTab(_ settings: TabSettings) {
         let slot = settings.reachable(.tab(.home))
         let context = Context(slot: slot)
-        if slot == .more { context.push(AppTab.home, named: AppTab.home.title) }
+        if slot == .more { context.push(AppTab.home, named: AppTab.home.title, kind: .section) }
         contexts.insert(context, at: (contexts.firstIndex { $0.id == activeID } ?? contexts.count - 1) + 1)
         activeID = context.id
         persist()
@@ -144,8 +144,8 @@ final class TabRouter {
 
     // MARK: - Deep links
 
-    func openArtist(_ name: String) {
-        active.push(ArtistRef(name: name), named: name)
+    func openArtist(_ name: String, artwork: String? = nil) {
+        active.push(ArtistRef(name: name), named: name, kind: .artist, artwork: artwork)
     }
 
     /// `focus` is the path of a track to scroll to — set when the user tapped a
@@ -153,31 +153,32 @@ final class TabRouter {
     func openAlbum(_ album: Album, focus: String? = nil) {
         if let focus {
             active.push(AlbumRef(album: album, focusPath: focus),
-                        named: album.title, artwork: album.artworkPath)
+                        named: album.title, kind: .album, artwork: album.artworkPath)
         } else {
-            active.push(album, named: album.title, artwork: album.artworkPath)
+            active.push(album, named: album.title, kind: .album, artwork: album.artworkPath)
         }
     }
 
     func openFolder(_ url: URL) {
-        active.push(FolderRef(url: url), named: url.lastPathComponent)
+        active.push(FolderRef(url: url), named: url.lastPathComponent, kind: .folder)
     }
 }
 
 extension View {
     /// Name the tab after this page, and give it a cover, for as long as it is
     /// showing.
-    func tabTitle(_ title: String, artwork: String? = nil) -> some View {
-        modifier(TabTitle(title: title, artwork: artwork))
+    func tabTitle(_ title: String, kind: PageKind, artwork: String? = nil) -> some View {
+        modifier(TabTitle(title: title, kind: kind, artwork: artwork))
     }
 }
 
 private struct TabTitle: ViewModifier {
     @Environment(TabRouter.self) private var router
     let title: String
+    let kind: PageKind
     let artwork: String?
 
     func body(content: Content) -> some View {
-        content.onAppear { router.nameCurrentPage(title, artwork: artwork) }
+        content.onAppear { router.nameCurrentPage(title, kind: kind, artwork: artwork) }
     }
 }
