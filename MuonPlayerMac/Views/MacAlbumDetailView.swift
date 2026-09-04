@@ -10,6 +10,7 @@ struct MacAlbumDetailView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @Environment(MacRouter.self) private var router
+    @Environment(SendToPhone.self) private var sendToPhone
     @State private var tracks: [Track] = []
     @State private var editing = false
     @State private var size: CGSize = .zero
@@ -271,6 +272,13 @@ struct MacAlbumDetailView: View {
         .contextMenu {
             Button("Edit Tags…") { editing = true }
             RevealInFinderButton(url: tracks.first?.url)
+            Divider()
+            Button("Send to iPhone") { Task { await sendToPhone.sendAlbum(album, library: library) } }
+                .disabled(sendToPhone.isBusy)
+            Button("Send to iPhone (Opus)") {
+                Task { await sendToPhone.sendAlbum(album, library: library, opus: true) }
+            }
+            .disabled(sendToPhone.isBusy)
         }
     }
 

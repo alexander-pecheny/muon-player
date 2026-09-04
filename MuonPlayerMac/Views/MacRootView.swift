@@ -68,6 +68,7 @@ struct MacRootView: View {
 
             MacPlayerBar()
         }
+        .overlay(alignment: .topTrailing) { SendToPhoneBanner() }
         .artworkAccent(player.accentColor)
         // A query typed while drilled into an album would otherwise stay hidden
         // behind it — the results only replace the section root.

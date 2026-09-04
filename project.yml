@@ -45,6 +45,11 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIRequiresFullScreen: true
+        # The Mac app pushes music straight into Documents over the local network.
+        NSLocalNetworkUsageDescription: MuonPlayer listens on your local network so the
+          Mac app can send music to this phone.
+        NSBonjourServices:
+          - _muon._tcp
     dependencies:
       - framework: Vendor/FFmpeg/libavcodec.xcframework
         embed: false
@@ -89,6 +94,10 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
+        NSLocalNetworkUsageDescription: MuonPlayer looks on your local network for a phone
+          to send music to.
+        NSBonjourServices:
+          - _muon._tcp
     entitlements:
       path: MuonPlayerMac/MuonPlayerMac.entitlements
       properties:
@@ -109,6 +118,10 @@ targets:
       - framework: Vendor/FFmpeg/libavutil.xcframework
         embed: false
       - framework: Vendor/FFmpeg/libswresample.xcframework
+        embed: false
+      # macOS only: libavcodec's codec table names the libopus encoder, so every
+      # macOS binary linking it needs the library, and no iOS one does.
+      - framework: Vendor/FFmpeg/libopus.xcframework
         embed: false
       - sdk: libz.tbd
       - sdk: libbz2.tbd
@@ -154,6 +167,8 @@ targets:
       - framework: Vendor/FFmpeg/libavutil.xcframework
         embed: false
       - framework: Vendor/FFmpeg/libswresample.xcframework
+        embed: false
+      - framework: Vendor/FFmpeg/libopus.xcframework
         embed: false
       - sdk: libz.tbd
       - sdk: libbz2.tbd

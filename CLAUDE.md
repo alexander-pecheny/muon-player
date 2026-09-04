@@ -41,7 +41,8 @@ for targets/settings.
 
 1. **FFmpeg xcframeworks** — `Vendor/FFmpeg/*.xcframework` (+ `include/module.modulemap`,
    imported in Swift as `CFFmpeg`). Slices: `ios-arm64`, `ios-arm64-simulator`,
-   `macos-arm64`. `Vendor/` is committed, so usually already present. Rebuild with
+   `macos-arm64`. `libopus.xcframework` is **macOS-only** and linked by the Mac app
+   and `muon-gapless`, because only the macOS slice carries an Opus *encoder*. `Vendor/` is committed, so usually already present. Rebuild with
    `scripts/build-ffmpeg.sh` (a few minutes) if missing — it reuses any slice
    already built under `.ffmpeg-build/`, so delete a slice dir to force it.
 2. **`MuonPlayer/Secrets.swift`** — `scripts/gen-secrets.sh` generates it from
@@ -63,7 +64,7 @@ xcodebuild -project MuonPlayer.xcodeproj -scheme MuonPlayer \
 Tests use **Swift Testing** (`@Test`/`#expect`), not XCTest. The XCTest summary
 line prints `Executed 0 tests` — that's expected; the real results are the
 `✔ Test …` / `✔ Test run with N tests in M suites passed` lines (currently
-80 tests in 18 suites).
+99 tests in 22 suites).
 
 ## Build & run the Mac app
 
@@ -243,6 +244,74 @@ A root the sandbox cannot read is dropped before the walk and left out of the pr
 Without that, an unmounted drive walks as empty and an unscoped prune deletes every
 track on it; `LibraryFolders` likewise keeps a bookmark that failed to resolve rather
 than forgetting the folder for good.
+
+### Sending music from the Mac
+
+Right-click an album, artist or folder in the Mac app → **Send to iPhone**, with the
+phone's app on screen. The phone advertises `_muon._tcp` and writes what arrives
+straight into Documents (`App/TransferReceiver.swift`, iOS-only); the Mac browses for it
+and speaks HTTP/1.1 over the connection (`MuonPlayerMac/TransferSender.swift`). The wire
+format and the path rules are shared, in `Shared/MuonTransfer.swift`. `scripts/muon-send.swift` is the same sender
+with a terminal in front of it:
+
+```bash
+swiftc -O scripts/muon-send.swift MuonPlayerMac/TransferSender.swift \
+  MuonPlayer/Shared/MuonTransfer.swift MuonPlayer/Library/LibraryRoot.swift \
+  MuonPlayer/Models/Track.swift MuonPlayer/Scanner/FileScanner.swift -o /tmp/muon-send
+/tmp/muon-send --list
+/tmp/muon-send ~/Music/"Arab Strap"/Philophobia
+```
+
+A file's destination is **its path relative to the Mac library root holding it**, which is
+the whole reason the folder tree survives the trip: `~/Music/Arab Strap/Philophobia/01.flac`
+lands at `Documents/Arab Strap/Philophobia/01.flac`, and the phone's single root mirrors the
+Mac's chosen folder with nothing remembering a mapping. A file under no root is an error,
+not a guess — the CLI reads the roots out of the Mac app's own bookmarks (the *path* comes
+out of a security-scoped bookmark without resolving the scope) and `--root` overrides that.
+Album and artist sends push the containing **folders** rather than the track files, so the
+cover art beside them goes too.
+
+Anyone on the network can find the service, so an unknown machine is asked about once and
+the answer kept per machine (Settings → Sending Macs, swipe to forget). A destination path
+is refused outright rather than sanitised if it is absolute or climbs out with `..`.
+
+Three things that are easy to get wrong here:
+
+- The rescan is the **receiver's** job, not an activation's. Music pushed from the Mac
+  arrives while the app is already on screen, so nothing brings it to the front afterwards.
+  A batch is over when nothing has arrived for two seconds — the sender never says so
+  explicitly, because a sender that dies mid-album still leaves files that belong in the
+  library.
+- Bodies are streamed into a **dot-prefixed** `.muon-incoming` and moved into place, which
+  is what makes a half-written file impossible for the scanner to see: it walks with
+  `.skipsHiddenFiles`.
+- `NWConnection`'s `.waiting` is **not** failure. A peer-to-peer link routinely reports the
+  network as down for a moment while it comes up, so treating that state as fatal breaks
+  exactly the AirDrop-style transfer `includePeerToPeer` is there to allow. A timeout
+  decides that a phone is not answering.
+
+The sender skips a file whose size and mtime the phone already has, and the receiver stamps
+each arrival with the Mac's mtime so that stays true. Resending an album therefore costs one
+manifest round trip and nothing else.
+
+**Send to iPhone (Opus)** re-encodes the lossless files on the way, at 160 kbps
+(`MuonPlayerMac/OpusTranscoder.swift`). Lossy sources are sent untouched: putting an mp3
+through Opus spends CPU to make it worse. Three things this rests on:
+
+- The encoder is **libopus**, enabled in the macOS FFmpeg slice alone
+  (`--enable-libopus --enable-encoder=libopus --enable-muxer=opus,ogg`), with libopus
+  itself built from source by `scripts/build-ffmpeg.sh`. Not FFmpeg's native Opus
+  encoder, which is experimental and worse at the same bitrate; and not Homebrew's
+  libopus, which is compiled for the current macOS and cannot be linked into a 14.0
+  deployment target. Output is within 0.1% of `ffmpeg -c:a libopus -b:a 160k`.
+- A transcoded file has **no size to offer in the manifest** — nobody knows it until the
+  encoder has run, and running the encoder for a file already on the phone is the work
+  worth skipping. So its entry carries `TransferEntry.sizeUnknown` and the phone judges
+  it by mtime alone, which is the *source* file's mtime, stamped on the copy that lands.
+- Cover art is moved by hand. The Ogg muxer will not take an attached-picture stream, so
+  the art is re-written as a base64 `METADATA_BLOCK_PICTURE` Vorbis comment — which is
+  where every other player looks for it in an `.opus`, and without it an Opus-sent album
+  arrives with no cover.
 
 ### Deleting from the phone
 

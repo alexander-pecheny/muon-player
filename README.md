@@ -87,8 +87,11 @@ credentials — scrobbling is simply disabled.
 
 ## Adding music
 
-**iOS** — import audio files via the Files app under **On My iPhone →
-MuonPlayer**, then **Settings → Rescan Library**.
+**iOS** — right-click an album, artist or folder in the Mac app and choose **Send
+to iPhone**, with MuonPlayer open on the phone and both on the same network. The
+first transfer from a machine asks the phone once. **Send to iPhone (Opus)**
+re-encodes lossless albums to 160 kbps on the way. Failing that, import audio files
+via the Files app under **On My iPhone → MuonPlayer**.
 
 To remove music from the phone, long-press an album, artist or folder and choose
 Delete.

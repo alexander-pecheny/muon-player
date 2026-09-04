@@ -37,6 +37,7 @@ struct AlbumCell: View {
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @Environment(MacRouter.self) private var router
+    @Environment(SendToPhone.self) private var sendToPhone
     @State private var editing = false
 
     /// The cover and title link to the album, the caption to the artist. The
@@ -77,6 +78,13 @@ struct AlbumCell: View {
             Button("Go to Artist") { router.openArtist(album.artist) }
             Button("Edit Tags…") { editing = true }
             Button("Reveal in Finder") { Task { await reveal() } }
+            Divider()
+            Button("Send to iPhone") { Task { await sendToPhone.sendAlbum(album, library: library) } }
+                .disabled(sendToPhone.isBusy)
+            Button("Send to iPhone (Opus)") {
+                Task { await sendToPhone.sendAlbum(album, library: library, opus: true) }
+            }
+            .disabled(sendToPhone.isBusy)
         }
         .sheet(isPresented: $editing) { MacTagEditView(scope: .album(album)) }
     }

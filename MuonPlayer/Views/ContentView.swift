@@ -4,6 +4,7 @@ struct ContentView: View {
     @Environment(Player.self) private var player
     @Environment(TabSettings.self) private var tabSettings
     @Environment(TabRouter.self) private var router
+    @Environment(TransferReceiver.self) private var receiver
     @State private var showNowPlaying = false
     @State private var didInitSelection = false
 
@@ -12,6 +13,19 @@ struct ContentView: View {
 
     var body: some View {
         content
+            .overlay(alignment: .bottom) {
+                if let status = receiver.status { TransferBanner(status: status) }
+            }
+            .animation(.default, value: receiver.status?.done)
+            .alert("Receive music?", isPresented: Binding(
+                get: { receiver.pendingTrust != nil },
+                set: { if !$0 { receiver.pendingTrust?.respond(false) } }
+            ), presenting: receiver.pendingTrust) { request in
+                Button("Allow") { request.respond(true) }
+                Button("Don't Allow", role: .cancel) { request.respond(false) }
+            } message: { request in
+                Text("\(request.sender.name) wants to add music to your library.")
+            }
             // App-wide tint follows the current track's artwork (mini player,
             // tab bar selection, buttons, swipe actions…). See DominantColor.
             .tint(player.accentColor)
@@ -262,5 +276,36 @@ private struct MiniAccessory: View {
         } else {
             ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 5)
         }
+    }
+}
+
+
+/// What is arriving from the Mac, over the tab bar. It says nothing at all until a
+/// transfer starts, and clears itself once the library has taken the files in.
+private struct TransferBanner: View {
+    let status: TransferReceiver.Status
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Receiving \(status.done) of \(status.total)")
+                    .font(.footnote.weight(.medium))
+                if !status.current.isEmpty {
+                    Text(status.current)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 60)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }

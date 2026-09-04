@@ -26,6 +26,12 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_muon._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MuonPlayer listens on your local network so the Mac app can send music to this phone.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

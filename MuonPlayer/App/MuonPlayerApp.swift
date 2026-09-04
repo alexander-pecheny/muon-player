@@ -8,6 +8,7 @@ struct MuonPlayerApp: App {
     @State private var scrobbler: ScrobbleService
     @State private var tabSettings = TabSettings()
     @State private var router = TabRouter()
+    @State private var receiver = TransferReceiver()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -32,11 +33,16 @@ struct MuonPlayerApp: App {
                 .environment(scrobbler)
                 .environment(tabSettings)
                 .environment(router)
+                .environment(receiver)
                 // Music arrives through the Files app, which means it arrives while
                 // this app is in the background. Coming back to the front is the
                 // moment to look.
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { library.rescanOnActivation() }
+                    if phase == .active {
+                        library.rescanOnActivation()
+                        // A suspended app loses its listener; starting is idempotent.
+                        receiver.start()
+                    }
                 }
                 .task {
                     // Let the playhead reach the library for artist-folder order.
@@ -52,6 +58,11 @@ struct MuonPlayerApp: App {
                         scrobbler.scrobbleEligible(track)
                     }
                     scrobbler.start()
+                    // Music pushed from the Mac lands in Documents while the app is on
+                    // screen, so no activation follows it — the receiver asks for the
+                    // rescan itself once a batch has settled.
+                    receiver.onFinished = { [library] in await library.rescanUntilSettled() }
+                    receiver.start()
                     DemoLibrary.seedIfNeeded()
                     await library.loadFromDatabase()
                     await library.rescan()
