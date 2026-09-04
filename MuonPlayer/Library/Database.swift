@@ -122,6 +122,8 @@ actor Database {
         addColumn("tracks", "ov_artist", "TEXT")
         addColumn("tracks", "ov_album", "TEXT")
         addColumn("tracks", "ov_album_artist", "TEXT")
+        // The cover image sitting in the track's folder, for music whose tags carry none.
+        addColumn("tracks", "folder_art", "TEXT")
         addColumn("tracks", "ov_composer", "TEXT")
         addColumn("tracks", "ov_track_no", "INTEGER")
         // Encoder delay/padding measured at an album seam, for files that declare none
@@ -288,6 +290,48 @@ actor Database {
             sqlite3_finalize(stmt)
         }
         return removed
+    }
+
+    /// Record each folder's cover image against the tracks under it.
+    ///
+    /// A track takes the cover of the nearest folder above it that has one, so a disc
+    /// folder with its own art wins and one without inherits the album's. That is
+    /// resolved here rather than by applying the folders in some order: overlapping
+    /// ranges applied in sequence overwrite each other, and a scan that rewrites the
+    /// same rows every time reports a change every time.
+    ///
+    /// `scope` bounds the sweep to the folders actually walked, so a scan of one album
+    /// does not clear the artwork of everything it did not look at. Returns how many
+    /// rows changed, which is a change the album grouping must be reloaded for.
+    @discardableResult
+    func setFolderArt(_ art: [String: String], under scope: [String]) -> Int {
+        guard let stmt = prepare("SELECT path, folder_art FROM tracks") else { return 0 }
+        var current: [(path: String, art: String?)] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let path = String(cString: sqlite3_column_text(stmt, 0))
+            let stored = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+                ? nil : String(cString: sqlite3_column_text(stmt, 1))
+            current.append((path, stored))
+        }
+        sqlite3_finalize(stmt)
+
+        var changed = 0
+        for (path, stored) in current {
+            guard scope.isEmpty || scope.contains(where: { path.hasPrefix($0 + "/") }) else { continue }
+            var folder = (path as NSString).deletingLastPathComponent
+            var wanted: String?
+            while folder.count > 1 {
+                if let found = art[folder] { wanted = found; break }
+                folder = (folder as NSString).deletingLastPathComponent
+            }
+            guard wanted != stored else { continue }
+            guard let update = prepare("UPDATE tracks SET folder_art = ? WHERE path = ?") else { continue }
+            if let wanted { bindText(update, 1, wanted) } else { sqlite3_bind_null(update, 1) }
+            bindText(update, 2, path)
+            if sqlite3_step(update) == SQLITE_DONE { changed += Int(sqlite3_changes(db)) }
+            sqlite3_finalize(update)
+        }
+        return changed
     }
 
     /// Forget these exact tracks, after their files have been deleted. Distinct from
@@ -491,7 +535,7 @@ actor Database {
                \(effAlbumGroup) AS al,
                COUNT(*) AS cnt,
                tracks.year,
-               MAX(CASE WHEN has_artwork=1 THEN path END)
+               COALESCE(MAX(CASE WHEN has_artwork=1 THEN path END), MAX(folder_art))
         FROM tracks
         GROUP BY aa, al, tracks.year
         ORDER BY aa COLLATE NOCASE, al COLLATE NOCASE, tracks.year;
@@ -519,7 +563,7 @@ actor Database {
                \(effAlbumGroup) AS al,
                COUNT(*) AS cnt,
                tracks.year,
-               MAX(CASE WHEN has_artwork=1 THEN path END),
+               COALESCE(MAX(CASE WHEN has_artwork=1 THEN path END), MAX(folder_art)),
                MAX(date_added) AS added
         FROM tracks
         GROUP BY aa, al, tracks.year

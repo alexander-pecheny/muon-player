@@ -276,8 +276,8 @@ final class LibraryStore {
         // large library this is thousands of stat() calls we don't want blocking
         // the UI. Returns every current path (for pruning) and just the subset
         // whose metadata needs (re)reading.
-        let (existingPaths, toRead) = await Task.detached(priority: .utility) { [scanner] in
-            let files = scanner.findAudioFiles { found in
+        let (existingPaths, toRead, folderArt) = await Task.detached(priority: .utility) { [scanner] in
+            let (files, art) = scanner.findAudioFilesAndArt { found in
                 Task { @MainActor [weak self] in
                     guard let self, self.isScanning else { return }
                     self.scanPhase = .findingFiles(found: found)
@@ -293,7 +293,7 @@ final class LibraryStore {
                 }
                 toRead.append((url.path, url, mtime))
             }
-            return (existingPaths, toRead)
+            return (existingPaths, toRead, art)
         }.value
 
         // Only surface the scanning UI when there's genuine work to do, so an
@@ -304,6 +304,10 @@ final class LibraryStore {
 
         let removed = await database.pruneMissing(existingPaths: existingPaths,
                                                   underFolders: pruneScope?.map(LibraryRoot.canonicalPath(of:)))
+        // Independent of the mtime diff: a cover dropped into a folder changes no
+        // track's mtime, and an existing library has never recorded one at all.
+        let recovered = await database.setFolderArt(folderArt,
+                                                    under: folders.map(LibraryRoot.canonicalPath(of:)))
 
         // Reloading means re-running the album grouping over the whole library and
         // rebuilding every view that holds a snapshot of it. A scan that found
@@ -314,7 +318,7 @@ final class LibraryStore {
         // loop it is held back and started once, at the end.
         if !settling { startGaplessMaintenance() }
 
-        guard !toRead.isEmpty || removed > 0 else { return false }
+        guard !toRead.isEmpty || removed > 0 || recovered > 0 else { return false }
         await loadFromDatabase()
         return true
     }
@@ -615,7 +619,9 @@ final class LibraryStore {
         await database.tracks(directlyInFolder: LibraryRoot.canonicalPath(of: folder))
     }
 
-    /// Load embedded artwork for a track path, decoded off the main actor.
+    /// Load artwork for a path, decoded off the main actor. The path is a track whose
+    /// tags hold a picture, or — when nothing in the album had one — the cover image
+    /// found in its folder, which is simply read.
     ///
     /// `maxPixel` caps the decoded size — grid cells ask for a thumbnail rather
     /// than a full 1500²-pixel cover, which is the difference between a smooth
@@ -628,8 +634,13 @@ final class LibraryStore {
         // scheduled ahead of the .utility scan, so visible covers still appear.
         return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
-                let meta = FFmpegMetadata.read(url: url, includeArtwork: true)
-                guard let data = meta.artwork else { cont.resume(returning: nil); return }
+                let data: Data?
+                if FileScanner.FolderArt.rank(url.lastPathComponent) != nil {
+                    data = try? Data(contentsOf: url)
+                } else {
+                    data = FFmpegMetadata.read(url: url, includeArtwork: true).artwork
+                }
+                guard let data else { cont.resume(returning: nil); return }
                 cont.resume(returning: PlatformImage.thumbnail(from: data, maxPixel: maxPixel))
             }
         }

@@ -259,6 +259,25 @@ safety there is, which is why nothing here is a swipe that acts immediately.
 and `path < f."0"`, "0" being the byte after "/") rather than with `LIKE`: a real folder
 name may well contain `%` or `_`.
 
+### Cover art in the folder
+
+A track whose tags carry no picture takes the cover image sitting beside it —
+`cover` first, then `folder`, then `front`, then `album*`, then any image at all
+(`FileScanner.FolderArt`). The images cost nothing to find: the scan's walk yields them
+either way.
+
+A track takes the cover of the *nearest* folder above it that has one, so a disc folder
+with its own art wins and one without inherits the album's. That is resolved in Swift
+(`Database.setFolderArt`) rather than by applying the folder ranges in some order —
+overlapping ranges applied in sequence overwrite each other, and a scan that rewrites the
+same rows every time reports a change every time, which forces a full album regroup on
+every launch forever.
+
+The sweep is bounded to the folders actually walked, so a scan of one album does not clear
+the artwork of everything it did not look at. It runs on every pass regardless of the mtime
+diff, because dropping a `cover.jpg` into a folder changes no track's mtime — which is also
+how an existing library picks the feature up without a forced re-read of every file.
+
 ## Library maintenance
 
 `scripts/muon-dedup.swift` removes redundant copies of an album, keeping the
