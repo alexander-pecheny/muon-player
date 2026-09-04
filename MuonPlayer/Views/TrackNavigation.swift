@@ -6,7 +6,6 @@ import SwiftUI
 struct TrackNavigationMenu: View {
     let track: Track
     @Environment(LibraryStore.self) private var library
-    @Environment(TabRouter.self) private var router
     @Environment(\.navPath) private var navPath
 
     var body: some View {
@@ -16,9 +15,6 @@ struct TrackNavigationMenu: View {
         if let album = library.album(for: track) {
             Button { navPath?.wrappedValue.append(AlbumRef(album: album, focusPath: track.url.path)) } label: {
                 Label("Go to Album", systemImage: "square.stack")
-            }
-            Button { router.openAlbum(album, focus: track.url.path, inNewTab: true) } label: {
-                Label("Open Album in New Tab", systemImage: "square.on.square")
             }
         }
     }

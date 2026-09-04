@@ -22,6 +22,19 @@ enum TabSelection: Hashable, BrowseSlot {
         case .more: return "ellipsis"
         }
     }
+
+    /// `AppTab.more` does not exist, and no `AppTab` rawValue is "more" (Home's
+    /// is "search"), so the two cases cannot collide in UserDefaults.
+    var rawValue: String {
+        switch self {
+        case .tab(let t): return t.rawValue
+        case .more: return "more"
+        }
+    }
+
+    init(rawValue: String) {
+        self = AppTab(rawValue: rawValue).map(TabSelection.tab) ?? .more
+    }
 }
 
 /// Owns the open browsing contexts, the selected tab within the active one, and
@@ -44,17 +57,25 @@ final class TabRouter {
     /// the whole TabView, the way it presents Now Playing.
     var showSwitcher = false
 
+    /// True when the open tabs came back from the last session, which is what
+    /// tells ContentView not to overrule the restored selection.
+    let restored: Bool
+
     init() {
-        let first = Context(slot: .tab(.albums))
-        contexts = [first]
-        activeID = first.id
+        let saved = (UserDefaults.standard.array(forKey: Self.key) as? [String] ?? [])
+            .map(TabSelection.init(rawValue:))
+        restored = !saved.isEmpty
+        let slots = saved.isEmpty ? [TabSelection.tab(.albums)] : saved
+        let open = slots.map(Context.init(slot:))
+        contexts = open
+        activeID = open[min(max(0, UserDefaults.standard.integer(forKey: Self.activeKey)), open.count - 1)].id
     }
 
     var active: Context { contexts.first { $0.id == activeID } ?? contexts[0] }
 
     var selection: TabSelection {
         get { active.slot }
-        set { active.slot = newValue }
+        set { active.slot = newValue; persist() }
     }
 
     func path(for slot: TabSelection) -> Binding<NavigationPath> {
@@ -73,15 +94,22 @@ final class TabRouter {
 
     // MARK: - Tabs
 
-    func newTab(activate: Bool = true) {
-        let context = Context(slot: active.slot)
+    /// A new tab starts on Home. When Home has been reordered into the overflow
+    /// it is pushed onto the More stack instead of leaving the tab on the More
+    /// list, so a new tab shows Home whatever the tab order.
+    func newTab(_ settings: TabSettings) {
+        let slot = settings.reachable(.tab(.home))
+        let context = Context(slot: slot)
+        if slot == .more { context.push(AppTab.home, named: AppTab.home.title) }
         contexts.insert(context, at: (contexts.firstIndex { $0.id == activeID } ?? contexts.count - 1) + 1)
-        if activate { activeID = context.id }
+        activeID = context.id
+        persist()
     }
 
     func activate(_ id: Context.ID) {
         guard contexts.contains(where: { $0.id == id }) else { return }
         activeID = id
+        persist()
     }
 
     @discardableResult
@@ -89,41 +117,47 @@ final class TabRouter {
         guard contexts.count > 1, let i = contexts.firstIndex(where: { $0.id == id }) else { return false }
         contexts.remove(at: i)
         if activeID == id { activeID = contexts[min(i, contexts.count - 1)].id }
+        persist()
         return true
+    }
+
+    /// Fold any restored slot that has since been pushed into the overflow onto
+    /// the More tab, or the TabView would be told to select a tag it has not got.
+    func reconcileSlots(with settings: TabSettings) {
+        for context in contexts { context.slot = settings.reachable(context.slot) }
+    }
+
+    // MARK: - Persistence
+
+    /// Which slots were open, and which tab was in front. Navigation history is
+    /// not restorable — `NavigationPath` holds arbitrary values — so a tab comes
+    /// back at its slot's root.
+    private static let key = "iosTabs"
+    private static let activeKey = "iosTabsActive"
+
+    private func persist() {
+        UserDefaults.standard.set(contexts.map(\.slot.rawValue), forKey: Self.key)
+        UserDefaults.standard.set(contexts.firstIndex { $0.id == activeID } ?? 0, forKey: Self.activeKey)
     }
 
     // MARK: - Deep links
 
-    /// Push onto the active context, or into a new one behind it — the long-press
-    /// "Open in New Tab", which stays put and lets the tab-count button be the
-    /// signal that something opened, as Safari does.
-    private func push<V: Hashable>(_ value: V, named title: String, inNewTab: Bool) {
-        let context: Context
-        if inNewTab {
-            context = Context(slot: active.slot)
-            contexts.insert(context, at: (contexts.firstIndex { $0.id == activeID } ?? contexts.count - 1) + 1)
-        } else {
-            context = active
-        }
-        context.push(value, named: title)
-    }
-
-    func openArtist(_ name: String, inNewTab: Bool = false) {
-        push(ArtistRef(name: name), named: name, inNewTab: inNewTab)
+    func openArtist(_ name: String) {
+        active.push(ArtistRef(name: name), named: name)
     }
 
     /// `focus` is the path of a track to scroll to — set when the user tapped a
     /// song name rather than an album name.
-    func openAlbum(_ album: Album, focus: String? = nil, inNewTab: Bool = false) {
+    func openAlbum(_ album: Album, focus: String? = nil) {
         if let focus {
-            push(AlbumRef(album: album, focusPath: focus), named: album.title, inNewTab: inNewTab)
+            active.push(AlbumRef(album: album, focusPath: focus), named: album.title)
         } else {
-            push(album, named: album.title, inNewTab: inNewTab)
+            active.push(album, named: album.title)
         }
     }
 
-    func openFolder(_ url: URL, inNewTab: Bool = false) {
-        push(FolderRef(url: url), named: url.lastPathComponent, inNewTab: inNewTab)
+    func openFolder(_ url: URL) {
+        active.push(FolderRef(url: url), named: url.lastPathComponent)
     }
 }
 

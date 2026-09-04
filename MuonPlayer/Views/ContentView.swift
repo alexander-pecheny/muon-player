@@ -7,13 +7,8 @@ struct ContentView: View {
     @State private var showNowPlaying = false
     @State private var didInitSelection = false
 
-    // iOS shows at most 5 items on the iPhone tab bar. With more than that, we
-    // reserve the last slot for our own More tab and fold the rest into it —
-    // rather than letting iOS build its automatic More tab, whose extra
-    // navigation controller doubled the bar/back button on folded-in screens.
-    private var barLimit: Int { tabSettings.order.count > 5 ? 4 : tabSettings.order.count }
-    private var visibleTabs: [AppTab] { Array(tabSettings.order.prefix(barLimit)) }
-    private var overflowTabs: [AppTab] { Array(tabSettings.order.dropFirst(barLimit)) }
+    private var visibleTabs: [AppTab] { tabSettings.visibleTabs }
+    private var overflowTabs: [AppTab] { tabSettings.overflowTabs }
 
     var body: some View {
         content
@@ -28,7 +23,11 @@ struct ContentView: View {
             .onAppear {
                 if !didInitSelection {
                     didInitSelection = true
-                    if let first = tabSettings.order.first { router.selection = .tab(first) }
+                    router.reconcileSlots(with: tabSettings)
+                    // Only choose a tab when there was nothing to restore.
+                    if !router.restored, let first = tabSettings.order.first {
+                        router.selection = .tab(first)
+                    }
                 }
             }
     }

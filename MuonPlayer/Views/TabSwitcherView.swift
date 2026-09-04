@@ -6,6 +6,7 @@ import SwiftUI
 /// from the count button that appears once a second tab exists.
 struct TabSwitcherView: View {
     @Environment(TabRouter.self) private var router
+    @Environment(TabSettings.self) private var settings
     @Environment(Player.self) private var player
     @Environment(\.dismiss) private var dismiss
 
@@ -28,7 +29,7 @@ struct TabSwitcherView: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { router.newTab(); dismiss() } label: {
+                    Button { router.newTab(settings); dismiss() } label: {
                         Label("New Tab", systemImage: "plus")
                     }
                 }
@@ -82,10 +83,12 @@ struct TabSwitcherView: View {
     }
 }
 
-/// The count button, shown only once a second tab exists — until then the phone
-/// looks exactly as it did.
-struct TabCountButton: ToolbarContent {
+/// New Tab, and — once there is more than one — the count that opens the
+/// switcher. A new tab starts on Home, or on the More tab if Home has been
+/// reordered into the overflow.
+struct TabToolbar: ToolbarContent {
     @Environment(TabRouter.self) private var router
+    @Environment(TabSettings.self) private var settings
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
@@ -95,11 +98,16 @@ struct TabCountButton: ToolbarContent {
                 }
             }
         }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { router.newTab(settings) } label: {
+                Label("New Tab", systemImage: "plus")
+            }
+        }
     }
 }
 
 extension View {
     func tabCountToolbar() -> some View {
-        toolbar { TabCountButton() }
+        toolbar { TabToolbar() }
     }
 }
