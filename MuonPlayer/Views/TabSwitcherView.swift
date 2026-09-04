@@ -45,10 +45,16 @@ struct TabSwitcherView: View {
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 ZStack(alignment: .topTrailing) {
-                    Image(systemName: context.slot.systemImage)
-                        .font(.system(size: 34))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 110)
+                    if let artwork = context.artworkPath {
+                        ArtworkView(path: artwork, cornerRadius: 0)
+                            .frame(maxWidth: .infinity, minHeight: 110, maxHeight: 110)
+                            .clipped()
+                    } else {
+                        Image(systemName: context.slot.systemImage)
+                            .font(.system(size: 34))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 110)
+                    }
                     if router.contexts.count > 1 {
                         Button { router.closeTab(context.id) } label: {
                             Image(systemName: "xmark.circle.fill")
