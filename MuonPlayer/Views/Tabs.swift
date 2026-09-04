@@ -53,6 +53,20 @@ final class TabSettings {
         }
     }
 
+    /// iOS shows at most 5 items on the iPhone tab bar. With more than that we
+    /// reserve the last slot for our own More tab and fold the rest into it —
+    /// rather than letting iOS build its automatic More tab, whose extra
+    /// navigation controller doubled the bar/back button on folded-in screens.
+    var visibleTabs: [AppTab] { Array(order.prefix(order.count > 5 ? 4 : order.count)) }
+    var overflowTabs: [AppTab] { Array(order.dropFirst(visibleTabs.count)) }
+
+    /// The slot `slot` will actually be reachable in, folding a tab that has been
+    /// pushed into the overflow onto the More tab.
+    func reachable(_ slot: TabSelection) -> TabSelection {
+        guard case .tab(let t) = slot else { return slot }
+        return visibleTabs.contains(t) ? slot : .more
+    }
+
     private func persist() {
         UserDefaults.standard.set(order.map(\.rawValue).joined(separator: ","), forKey: key)
     }

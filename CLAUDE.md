@@ -210,10 +210,14 @@ On **iOS** the same `BrowseContext` sits under `TabRouter`, and the bottom bar p
 within the active context exactly as the macOS sidebar does — so every context keeps its own
 stack per tab and nothing about the one-context app changed. There is no strip: a fourth
 horizontal band under the navigation bar, the tab bar and the mini player is more than the
-screen has. Tabs are invisible until you make one (long-press → Open in New Tab, which opens
-behind you), at which point a count button appears in the navigation bar and opens
-`TabSwitcherView` — cards, tap to switch, × to close. Close the last extra tab and the button
-goes away again. iOS does not restore tabs across launches; macOS does.
+screen has. A + in the navigation bar opens a new tab on Home; a count button appears beside
+it once there is more than one and opens `TabSwitcherView` — cards, tap to switch, × to close.
+
+Home may not be in the bar at all, since the order is the user's (Settings → Tab Order) and
+anything past the fourth slot is folded into our own More tab. So a new tab lands on `.more`
+with Home *pushed* onto it, rather than on the More list. Both platforms restore which slots
+were open, not the history behind them, which is why a Home tab made that way comes back
+named More.
 
 ### When the library rescans
 
