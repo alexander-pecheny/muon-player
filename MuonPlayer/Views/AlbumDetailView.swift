@@ -13,6 +13,7 @@ struct AlbumDetailView: View {
     @State private var editingAlbum = false
     @State private var editingTrack: Track?
     @State private var didFocus = false
+    @State private var zoomingArtwork = false
     // This album's own artwork color, independent of what's playing — so a red
     // album never gets tinted by a green now-playing track (and vice versa).
     @State private var albumAccent: Color = .neutralAccent
@@ -38,6 +39,7 @@ struct AlbumDetailView: View {
                         .frame(maxWidth: 320)
                         .shadow(radius: 8, y: 4)
                         .padding(.top, 8)
+                        .onTapGesture { zoomingArtwork = album.artworkPath != nil }
 
                     VStack(spacing: 2) {
                         Text(album.title).font(.title3.bold()).multilineTextAlignment(.center)
@@ -119,6 +121,9 @@ struct AlbumDetailView: View {
             }
         }
         .sheet(isPresented: $editingAlbum) { TagEditView(scope: .album(album)) }
+        .fullScreenCover(isPresented: $zoomingArtwork) {
+            if let path = album.artworkPath { ArtworkZoomView(path: path) }
+        }
         .sheet(item: $editingTrack) { t in TagEditView(scope: .track(t)) }
         .overlay {
             if tracks.isEmpty {
