@@ -1,43 +1,81 @@
 import SwiftUI
 
-struct MiniPlayer: View {
+/// The mini player's row, shared by the pre-26 bar and the iOS 26 bottom
+/// accessory: cover on the left, then the waveform over the full remaining
+/// height with the text and transport controls laid on top of it.
+struct MiniPlayerContent: View {
     @Environment(Player.self) private var player
+    var cornerRadius: CGFloat = 6
     var onTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 12) {
-                ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 6)
-                    .frame(width: 44, height: 44)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(player.currentTrack?.title ?? "")
-                        .font(.subheadline.weight(.medium)).lineLimit(1)
-                    if let artist = player.currentTrack?.artist {
-                        Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        HStack(spacing: 8) {
+            artwork
+                .aspectRatio(1, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            ZStack {
+                MiniWaveform()
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(player.currentTrack?.title ?? "")
+                            .font(.subheadline.weight(.medium)).lineLimit(1)
+                        if let artist = player.currentTrack?.artist {
+                            Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
+                    Spacer(minLength: 4)
+                    controls
                 }
-                Spacer()
-
-                Button { player.previous() } label: {
-                    Image(systemName: "backward.fill").font(.title3)
-                }
-                Button { player.togglePlayPause() } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title3)
-                }
-                Button { player.next() } label: {
-                    Image(systemName: "forward.fill").font(.title3)
-                }
+                .padding(.horizontal, 8)
             }
-            MiniWaveform(height: 14)
         }
+        .frame(maxHeight: .infinity)
         .buttonStyle(.plain)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) { Divider() }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+    }
+
+    private var controls: some View {
+        HStack(spacing: 8) {
+            Button { player.previous() } label: { Image(systemName: "backward.fill") }
+            Button { player.togglePlayPause() } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+            }
+            Button { player.next() } label: { Image(systemName: "forward.fill") }
+        }
+        .font(.title3)
+    }
+
+    @ViewBuilder private var artwork: some View {
+        if let art = player.currentArtwork {
+            Image(platformImage: art).resizable().scaledToFill()
+        } else {
+            ArtworkView(path: player.currentTrack?.url.path, cornerRadius: cornerRadius)
+        }
+    }
+}
+
+struct MiniPlayer: View {
+    var onTap: () -> Void
+
+    var body: some View {
+        MiniPlayerContent(onTap: onTap)
+            .frame(height: 52)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// The iOS 26 tab-view bottom accessory, which provides its own glass
+/// background and sets the height.
+struct MiniAccessory: View {
+    var onTap: () -> Void
+
+    var body: some View {
+        MiniPlayerContent(cornerRadius: 5, onTap: onTap)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
     }
 }

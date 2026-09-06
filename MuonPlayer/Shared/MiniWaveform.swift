@@ -7,7 +7,8 @@ struct MiniWaveform: View {
     @Environment(Player.self) private var player
     @State private var waveform: [Float] = []
 
-    var height: CGFloat = 14
+    /// nil fills whatever height the parent gives.
+    var height: CGFloat?
     var barWidth: CGFloat = 2
     var barSpacing: CGFloat = 1.5
 
