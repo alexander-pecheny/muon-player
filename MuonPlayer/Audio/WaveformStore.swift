@@ -8,7 +8,7 @@ actor WaveformStore {
     static let shared = WaveformStore()
 
     /// Number of bars in a generated waveform.
-    static let bucketCount = 220
+    static let bucketCount = 1000
 
     private var cache: [String: [Float]] = [:]
     private var inFlight: [String: Task<[Float], Never>] = [:]

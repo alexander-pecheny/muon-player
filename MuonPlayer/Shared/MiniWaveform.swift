@@ -9,8 +9,6 @@ struct MiniWaveform: View {
 
     /// nil fills whatever height the parent gives.
     var height: CGFloat?
-    var barWidth: CGFloat = 2
-    var barSpacing: CGFloat = 1.5
 
     private var progress: Double {
         guard player.duration > 0 else { return 0 }
@@ -19,8 +17,7 @@ struct MiniWaveform: View {
 
     var body: some View {
         WaveformSeekBar(samples: waveform, progress: progress, interactive: false,
-                        minBarHeight: 2, barWidth: barWidth, barSpacing: barSpacing,
-                        accent: player.accentColor)
+                        minBarHeight: 2, accent: player.accentColor)
             .frame(height: height)
             .allowsHitTesting(false)
             .task(id: player.currentTrack?.url) {
