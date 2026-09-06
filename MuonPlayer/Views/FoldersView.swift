@@ -29,7 +29,7 @@ struct FoldersView: View {
             if !shownFolders.isEmpty {
                 Section {
                     ForEach(shownFolders, id: \.path) { folder in
-                        NavigationLink(value: FolderRef(url: folder)) {
+                        NavigationLink(value: Route.folder(FolderRef(url: folder))) {
                             Label(folder.lastPathComponent, systemImage: "folder")
                         }
                     }

@@ -9,11 +9,11 @@ struct TrackNavigationMenu: View {
     @Environment(\.navPath) private var navPath
 
     var body: some View {
-        Button { navPath?.wrappedValue.append(ArtistRef(name: track.effectiveAlbumArtist)) } label: {
+        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: track.effectiveAlbumArtist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
         if let album = library.album(for: track) {
-            Button { navPath?.wrappedValue.append(AlbumRef(album: album, focusPath: track.url.path)) } label: {
+            Button { navPath?.wrappedValue.append(.albumRef(AlbumRef(album: album, focusPath: track.url.path))) } label: {
                 Label("Go to Album", systemImage: "square.stack")
             }
         }

@@ -117,9 +117,9 @@ struct HistoryView: View {
         Task {
             guard let album = await library.album(containingPath: path) else { return }
             if artist {
-                navPath.wrappedValue.append(ArtistRef(name: album.artist))
+                navPath.wrappedValue.append(.artist(ArtistRef(name: album.artist)))
             } else {
-                navPath.wrappedValue.append(AlbumRef(album: album, focusPath: path))
+                navPath.wrappedValue.append(.albumRef(AlbumRef(album: album, focusPath: path)))
             }
         }
     }

@@ -43,7 +43,7 @@ struct AlbumDetailView: View {
 
                     VStack(spacing: 2) {
                         Text(album.title).font(.title3.bold()).multilineTextAlignment(.center)
-                        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+                        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
                             Text(album.artist).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                         .buttonStyle(.plain)
@@ -166,7 +166,7 @@ struct AlbumDetailView: View {
     // MARK: Menus
 
     @ViewBuilder private var albumMenu: some View {
-        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
         Button { for t in tracks { player.enqueue(t, context: tracks) } } label: {
@@ -178,7 +178,7 @@ struct AlbumDetailView: View {
     }
 
     @ViewBuilder private func trackMenu(_ track: Track) -> some View {
-        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
         Button { player.enqueue(track, context: tracks) } label: {

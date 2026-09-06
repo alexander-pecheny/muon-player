@@ -18,7 +18,7 @@ struct HomeView: View {
     /// A grid cell already navigates to its album on tap, so the artist link has
     /// to live in the long-press menu.
     @ViewBuilder private func goToArtist(_ album: Album) -> some View {
-        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
     }
@@ -56,7 +56,7 @@ struct HomeView: View {
                         .padding(.top, 4)
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(recent) { album in
-                            NavigationLink(value: album) { albumCell(album) }
+                            NavigationLink(value: Route.album(album)) { albumCell(album) }
                                 .buttonStyle(.plain)
                                 .contextMenu { goToArtist(album) }
                         }
@@ -89,7 +89,7 @@ struct HomeView: View {
             if !results.artists.isEmpty {
                 Section("Artists") {
                     ForEach(results.artists) { artist in
-                        NavigationLink(value: ArtistRef(name: artist.name)) {
+                        NavigationLink(value: Route.artist(ArtistRef(name: artist.name))) {
                             HStack(spacing: 12) {
                                 ArtworkView(path: artist.artworkPath, cornerRadius: 6)
                                     .frame(width: 44, height: 44)
@@ -103,7 +103,7 @@ struct HomeView: View {
             if !results.albums.isEmpty {
                 Section("Albums") {
                     ForEach(results.albums) { album in
-                        NavigationLink(value: album) {
+                        NavigationLink(value: Route.album(album)) {
                             HStack(spacing: 12) {
                                 ArtworkView(path: album.artworkPath, cornerRadius: 6)
                                     .frame(width: 44, height: 44)

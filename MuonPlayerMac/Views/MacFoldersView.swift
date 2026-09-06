@@ -20,7 +20,7 @@ struct MacFoldersView: View {
             if !subfolders.isEmpty {
                 Section {
                     ForEach(subfolders, id: \.path) { folder in
-                        NavigationLink(value: FolderRef(url: folder)) {
+                        NavigationLink(value: Route.folder(FolderRef(url: folder))) {
                             Label(folder.lastPathComponent,
                                   systemImage: isRoot ? "folder.badge.gearshape" : "folder")
                         }

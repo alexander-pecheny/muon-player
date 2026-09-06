@@ -107,14 +107,11 @@ private struct MoreTab: View {
         let path = router.path(for: .more)
         NavigationStack(path: path) {
             List(tabs) { tab in
-                NavigationLink(value: tab) {
+                NavigationLink(value: Route.section(tab.rawValue)) {
                     Label(tab.title, systemImage: tab.systemImage)
                 }
             }
             .navigationTitle("More")
-            .navigationDestination(for: AppTab.self) {
-                TabRootView(tab: $0).tabCountToolbar()
-            }
             .tabCountToolbar()
             .modifier(CommonDestinations())
         }
@@ -167,46 +164,32 @@ private struct ScanStatusCapsule: View {
     }
 }
 
-/// Value-based destinations registered once per navigation stack.
+/// Every pushed page, registered once per navigation stack.
 private struct CommonDestinations: ViewModifier {
-    @Environment(LibraryStore.self) private var library
-
-    /// An artist has no art of its own; the app shows one of their covers, and
-    /// the tab card follows suit.
-    private func artistArtwork(_ name: String) -> String? {
-        library.albums.first { $0.artist == name && $0.artworkPath != nil }?.artworkPath
-    }
-
     func body(content: Content) -> some View {
-        content
-            .navigationDestination(for: Album.self) {
-                AlbumDetailView(album: $0).tabTitle($0.title, kind: .album, artwork: $0.artworkPath).tabCountToolbar()
+        content.navigationDestination(for: Route.self) { route in
+            Group {
+                switch route {
+                case .album(let album): AlbumDetailView(album: album)
+                case .albumRef(let ref): AlbumDetailView(album: ref.album, focusPath: ref.focusPath)
+                case .artist(let ref): ArtistView(artist: ref.name)
+                case .folder(let ref): FoldersView(directory: ref.url)
+                case .section(let raw): TabRootView(tab: AppTab(rawValue: raw) ?? .home)
+                }
             }
-            .navigationDestination(for: AlbumRef.self) {
-                AlbumDetailView(album: $0.album, focusPath: $0.focusPath)
-                    .tabTitle($0.album.title, kind: .album, artwork: $0.album.artworkPath)
-                    .tabCountToolbar()
-            }
-            .navigationDestination(for: ArtistRef.self) {
-                ArtistView(artist: $0.name)
-                    .tabTitle($0.name, kind: .artist, artwork: artistArtwork($0.name))
-                    .tabCountToolbar()
-            }
-            .navigationDestination(for: FolderRef.self) {
-                FoldersView(directory: $0.url)
-                    .tabTitle($0.url.lastPathComponent, kind: .folder).tabCountToolbar()
-            }
+            .tabCountToolbar()
+        }
     }
 }
 
 /// Lets a deeply-pushed view (e.g. AlbumDetailView's "Go to Artist") push onto
 /// its enclosing tab stack without registering its own `navigationDestination`.
 private struct NavPathKey: EnvironmentKey {
-    static let defaultValue: Binding<NavigationPath>? = nil
+    static let defaultValue: Binding<[Route]>? = nil
 }
 
 extension EnvironmentValues {
-    var navPath: Binding<NavigationPath>? {
+    var navPath: Binding<[Route]>? {
         get { self[NavPathKey.self] }
         set { self[NavPathKey.self] = newValue }
     }

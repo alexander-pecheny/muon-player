@@ -35,18 +35,15 @@ struct MacRootView: View {
                                 MacSearchResultsView(query: router.searchQuery)
                             }
                         }
-                        .navigationDestination(for: Album.self) {
-                            MacAlbumDetailView(album: $0).tabTitle($0.title, kind: .album, artwork: $0.artworkPath)
-                        }
-                        .navigationDestination(for: AlbumRef.self) {
-                            MacAlbumDetailView(album: $0.album, focusPath: $0.focusPath)
-                                .tabTitle($0.album.title, kind: .album, artwork: $0.album.artworkPath)
-                        }
-                        .navigationDestination(for: ArtistRef.self) {
-                            MacArtistView(artist: $0.name).tabTitle($0.name, kind: .artist)
-                        }
-                        .navigationDestination(for: FolderRef.self) {
-                            MacFoldersView(directory: $0.url).tabTitle($0.url.lastPathComponent, kind: .folder)
+                        .navigationDestination(for: Route.self) { route in
+                            switch route {
+                            case .album(let album): MacAlbumDetailView(album: album)
+                            case .albumRef(let ref):
+                                MacAlbumDetailView(album: ref.album, focusPath: ref.focusPath)
+                            case .artist(let ref): MacArtistView(artist: ref.name)
+                            case .folder(let ref): MacFoldersView(directory: ref.url)
+                            case .section: EmptyView()
+                            }
                         }
                     }
                     // A tab is its own browsing context, so switching to one

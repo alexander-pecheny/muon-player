@@ -44,7 +44,7 @@ struct AlbumCell: View {
     /// label — a button in there never sees the click, and swallows it besides.
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            NavigationLink(value: album) {
+            NavigationLink(value: Route.album(album)) {
                 VStack(alignment: .leading, spacing: 6) {
                     ArtworkView(path: album.artworkPath, cornerRadius: 6)
                         .aspectRatio(1, contentMode: .fit)
