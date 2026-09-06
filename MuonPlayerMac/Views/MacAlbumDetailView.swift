@@ -227,7 +227,7 @@ struct MacAlbumDetailView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 18) {
-            ArtworkView(path: album.artworkPath, cornerRadius: 8, maxPixel: 900)
+            ArtworkView(path: album.artworkPath, cornerRadius: 8, maxPixel: 900, contentMode: .fit)
                 .frame(width: 336, height: 336)
                 .shadow(radius: 6, y: 3)
                 .onTapGesture {

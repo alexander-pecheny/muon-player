@@ -33,7 +33,7 @@ struct AlbumDetailView: View {
         List {
             Section {
                 VStack(spacing: 12) {
-                    ArtworkView(path: album.artworkPath, cornerRadius: 12)
+                    ArtworkView(path: album.artworkPath, cornerRadius: 12, contentMode: .fit)
                         .aspectRatio(1, contentMode: .fit)
                         .frame(maxWidth: 320)
                         .shadow(radius: 8, y: 4)

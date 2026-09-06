@@ -74,7 +74,7 @@ struct NowPlayingView: View {
             Image(uiImage: art).resizable().aspectRatio(contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
         } else {
-            ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 16)
+            ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 16, contentMode: .fit)
         }
     }
 

@@ -46,7 +46,7 @@ struct TabSwitcherView: View {
             VStack(alignment: .leading, spacing: 0) {
                 ZStack(alignment: .topTrailing) {
                     if let artwork = context.artworkPath {
-                        ArtworkView(path: artwork, cornerRadius: 0)
+                        ArtworkView(path: artwork, cornerRadius: 0, contentMode: .fit)
                             .frame(maxWidth: .infinity, minHeight: 110, maxHeight: 110)
                             .clipped()
                     } else {
