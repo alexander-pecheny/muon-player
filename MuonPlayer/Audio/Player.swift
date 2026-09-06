@@ -284,7 +284,24 @@ final class Player {
     func clearQueue() { queue.clearQueue(); refreshUpNext() }
     private func refreshUpNext() {
         upNext = queue.queuedItems()
-        nextUpTrack = queue.peekNext()
+        let next = queue.peekNext()
+        if next?.url != nextUpTrack?.url { prefetch(next) }
+        nextUpTrack = next
+    }
+
+    /// Decode the next track's waveform and cover while the current one still
+    /// plays: at a gapless seam the UI switches on the same tick as the audio,
+    /// and anything loaded only then would pop in a moment late.
+    private func prefetch(_ track: Track?) {
+        guard let track else { return }
+        if let duration = track.duration, duration > 0 {
+            Task.detached(priority: .utility) {
+                _ = await WaveformStore.shared.waveform(for: track.url, duration: duration)
+            }
+        }
+        if track.hasArtwork, let library {
+            Task { _ = await ArtworkCache.shared.load(path: track.url.path, from: library) }
+        }
     }
 
     // MARK: - Playback core
@@ -393,7 +410,9 @@ final class Player {
             currentDecoder = nil
             return nil
         }
-        DispatchQueue.main.async { [weak self] in self?.refreshUpNext() }
+        // No refreshUpNext here: the decoder crosses the seam seconds before the
+        // audio does, and Up Next must not flip while the old track is audible.
+        // tick() refreshes it when the playhead reaches the new segment.
         openDecoder(for: nextTrack, offset: 0, generation: gen)
         return currentDecoder?.nextBuffer()
     }
