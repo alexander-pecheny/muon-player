@@ -199,9 +199,12 @@ struct AlbumDetailView: View {
     }
 
     private var trackCountLine: String {
-        let count = "\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")"
-        guard let year = album.year else { return count }
-        return "\(year) · \(count)"
+        var parts: [String] = []
+        if let year = album.year { parts.append(String(year)) }
+        parts.append("\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")")
+        let total = tracks.compactMap(\.duration).reduce(0, +)
+        if total > 0 { parts.append(formatDuration(total)) }
+        return parts.joined(separator: " · ")
     }
 
     /// Item #5: format + bitrate summary for the album.
