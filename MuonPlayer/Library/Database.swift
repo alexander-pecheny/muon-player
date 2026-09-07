@@ -194,6 +194,8 @@ actor Database {
         addColumn("history", "duration", "INTEGER")
         addColumn("history", "listened", "INTEGER")
         addColumn("history", "position", "INTEGER")
+        // A track's peak envelope, 1000 bytes; decoding the file for it takes a second.
+        exec("CREATE TABLE IF NOT EXISTS waveforms (path TEXT PRIMARY KEY, peaks BLOB NOT NULL);")
     }
 
     /// Add a column if the table doesn't already have it (poor-man's migration).
@@ -238,6 +240,7 @@ actor Database {
 
     @discardableResult
     func upsertTrack(path: String, meta: TrackMetadata, hasArtwork: Bool, mtime: Double) -> Int64? {
+        forgetWaveform(path: path)
         // Only file-derived columns are written here; ov_* override columns are
         // deliberately left untouched so user tag edits survive rescans.
         let sql = """
@@ -299,7 +302,7 @@ actor Database {
     /// date_added. Only stale rows are touched, so the FTS update trigger fires
     /// once per container change, not every launch.
     func normalizeContainerPaths(currentDocuments docs: String) {
-        for table in ["tracks", "history"] {
+        for table in ["tracks", "history", "waveforms"] {
             let sql = """
             UPDATE \(table)
             SET path = ?1 || substr(path, instr(path, '/Documents/') + 10)
@@ -772,6 +775,33 @@ actor Database {
         var ids: [Int64] = []
         while sqlite3_step(stmt) == SQLITE_ROW { ids.append(sqlite3_column_int64(stmt, 0)) }
         return ids
+    }
+
+    // MARK: - Waveforms
+
+    func waveform(forPath path: String) -> [Float]? {
+        guard let stmt = prepare("SELECT peaks FROM waveforms WHERE path=?") else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, path)
+        guard sqlite3_step(stmt) == SQLITE_ROW, let bytes = sqlite3_column_blob(stmt, 0) else { return nil }
+        return Data(bytes: bytes, count: Int(sqlite3_column_bytes(stmt, 0))).map { Float($0) / 255 }
+    }
+
+    func saveWaveform(path: String, peaks: [Float]) {
+        guard let stmt = prepare("INSERT OR REPLACE INTO waveforms (path, peaks) VALUES (?,?)") else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, path)
+        let data = Data(peaks.map { UInt8((min(1, max(0, $0)) * 255).rounded()) })
+        data.withUnsafeBytes { _ = sqlite3_bind_blob(stmt, 2, $0.baseAddress, Int32(data.count), SQLITE_TRANSIENT) }
+        sqlite3_step(stmt)
+    }
+
+    /// A file that is re-indexed has changed, and its envelope with it.
+    private func forgetWaveform(path: String) {
+        guard let stmt = prepare("DELETE FROM waveforms WHERE path=?") else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, path)
+        sqlite3_step(stmt)
     }
 
     // MARK: - Play history

@@ -42,6 +42,7 @@ struct MuonPlayerApp: App {
                     // Let the playhead reach the library for artist-folder order.
                     player.library = library
                     connectScrobbler(scrobbler, to: player)
+                    await WaveformStore.shared.attach(library.database)
                     scrobbler.start()
                     DemoLibrary.seedIfNeeded()
                     await library.loadFromDatabase()

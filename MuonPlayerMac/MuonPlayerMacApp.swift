@@ -40,6 +40,7 @@ struct MuonPlayerMacApp: App {
                 .task {
                     player.library = library
                     connectScrobbler(scrobbler, to: player)
+                    await WaveformStore.shared.attach(library.database)
                     scrobbler.start()
                     await library.loadFromDatabase()
                     await restoreLastPlayed(player, from: library)

@@ -14,6 +14,10 @@ actor WaveformStore {
     /// heads for the background is snapshotted before an await comes back.
     private let ready = ReadyCache()
     private var inFlight: [String: Task<[Float], Never>] = [:]
+    private var database: Database?
+
+    /// Where finished waveforms are kept between launches.
+    func attach(_ database: Database) { self.database = database }
 
     nonisolated func peek(_ url: URL) -> [Float]? { ready.get(url.path) }
 
@@ -23,6 +27,10 @@ actor WaveformStore {
         let key = url.path
         if let cached = ready.get(key) { return cached }
         if let running = inFlight[key] { return await running.value }
+        if let saved = await database?.waveform(forPath: key), saved.count == Self.bucketCount {
+            ready.set(key, saved)
+            return saved
+        }
 
         let task = Task<[Float], Never>.detached(priority: .utility) {
             Self.generate(url: url, duration: duration, buckets: Self.bucketCount)
@@ -31,6 +39,7 @@ actor WaveformStore {
         let result = await task.value
         ready.set(key, result)
         inFlight[key] = nil
+        if !result.isEmpty { await database?.saveWaveform(path: key, peaks: result) }
         return result
     }
 
