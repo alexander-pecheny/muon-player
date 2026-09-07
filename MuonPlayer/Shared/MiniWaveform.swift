@@ -13,11 +13,6 @@ struct MiniWaveform<Label: View>: View {
     var height: CGFloat?
     @ViewBuilder var label: () -> Label
 
-    private static var ring: [CGSize] {
-        [(2.5, 0), (-2.5, 0), (0, 2.5), (0, -2.5), (1.8, 1.8), (1.8, -1.8), (-1.8, 1.8), (-1.8, -1.8)]
-            .map { CGSize(width: $0.0, height: $0.1) }
-    }
-
     private var progress: Double {
         guard player.duration > 0 else { return 0 }
         return min(1, max(0, player.currentTime / player.duration))
@@ -46,13 +41,12 @@ struct MiniWaveform<Label: View>: View {
             }
     }
 
-    /// The label grown by two and a half points in every direction, plus a soft edge.
+    /// The label grown into a rim: six blurred copies stacked, so the blur's
+    /// faint edge adds up to solid near the glyphs and fades a few points out.
+    /// Offset copies would show as separate silhouettes on a thin face.
     private var contour: some View {
         ZStack {
-            ForEach(Array(Self.ring.enumerated()), id: \.offset) { _, offset in
-                label().offset(offset)
-            }
-            label().blur(radius: 5)
+            ForEach(0..<6, id: \.self) { _ in label().blur(radius: 2.5) }
         }
     }
 }
