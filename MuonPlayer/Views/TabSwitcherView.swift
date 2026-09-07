@@ -8,6 +8,7 @@ struct TabSwitcherView: View {
     @Environment(TabRouter.self) private var router
     @Environment(TabSettings.self) private var settings
     @Environment(Player.self) private var player
+    @Environment(LibraryStore.self) private var library
     @Environment(\.dismiss) private var dismiss
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
@@ -37,6 +38,13 @@ struct TabSwitcherView: View {
         }
     }
 
+    /// An artist has no art of its own, so the card shows one of their covers.
+    private func cover(for context: TabRouter.Context) -> String? {
+        if let path = context.artworkPath { return path }
+        guard case .artist(let ref)? = context.path.last else { return nil }
+        return library.albums.first { $0.artist == ref.name && $0.artworkPath != nil }?.artworkPath
+    }
+
     private func card(_ context: TabRouter.Context) -> some View {
         let active = context.id == router.activeID
         return Button {
@@ -45,8 +53,8 @@ struct TabSwitcherView: View {
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 ZStack(alignment: .topTrailing) {
-                    if let artwork = context.artworkPath {
-                        ArtworkView(path: artwork, cornerRadius: 0)
+                    if let artwork = cover(for: context) {
+                        ArtworkView(path: artwork, cornerRadius: 0, contentMode: .fit)
                             .frame(maxWidth: .infinity, minHeight: 110, maxHeight: 110)
                             .clipped()
                     } else {

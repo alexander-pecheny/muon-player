@@ -67,12 +67,10 @@ final class MacRouter {
         set { active.searchQuery = newValue }
     }
 
-    var path: Binding<NavigationPath> {
+    var path: Binding<[Route]> {
         Binding(get: { self.active.path },
                 set: { new in
                     self.active.paths[self.active.slot] = new
-                    // A pop shortens the trail of names behind the tab's title.
-                    self.active.truncateCrumbs(to: new.count)
                     self.persist()
                 })
     }
@@ -82,19 +80,9 @@ final class MacRouter {
     var searchFocusToken = 0
     func focusSearch() { searchFocusToken += 1 }
 
-    /// Called by a pushed page to name itself, which is what the tab is called
-    /// while that page is showing.
-    func nameCurrentPage(_ title: String, kind: PageKind, artwork: String? = nil) {
-        active.name(title, kind: kind, artwork: artwork)
-        persist()
-    }
-
     /// Pop the current section back to its root, so a search typed while drilled
     /// into an album lands on the results rather than staying hidden behind it.
-    func popToRoot() {
-        active.paths[active.slot] = NavigationPath()
-        active.crumbs[active.slot] = []
-    }
+    func popToRoot() { active.paths[active.slot] = [] }
 
     // MARK: - Tabs
 
@@ -134,8 +122,7 @@ final class MacRouter {
     /// ⌘-click opens in a background tab, as it does in a browser. Reading the
     /// modifier here rather than at each call site is what makes that true of
     /// every way into an album — the grid, search results, the player bar.
-    private func push<V: Hashable>(_ value: V, named title: String, kind: PageKind,
-                                   artwork: String? = nil, inNewTab: Bool = false) {
+    private func push(_ route: Route, inNewTab: Bool = false) {
         showQueue = false
         let tab: BrowseTab
         if inNewTab || NSEvent.modifierFlags.contains(.command) {
@@ -145,28 +132,23 @@ final class MacRouter {
         } else {
             tab = active
         }
-        tab.push(value, named: title, kind: kind, artwork: artwork)
+        tab.push(route)
         persist()
     }
 
     func openArtist(_ name: String, inNewTab: Bool = false) {
-        push(ArtistRef(name: name), named: name, kind: .artist, inNewTab: inNewTab)
+        push(.artist(ArtistRef(name: name)), inNewTab: inNewTab)
     }
 
     /// `focus` is the path of a track to scroll to — set when the user clicked a
     /// song name rather than an album name.
     func openAlbum(_ album: Album, focus: String? = nil, inNewTab: Bool = false) {
-        if let focus {
-            push(AlbumRef(album: album, focusPath: focus), named: album.title, kind: .album,
-                 artwork: album.artworkPath, inNewTab: inNewTab)
-        } else {
-            push(album, named: album.title, kind: .album,
-                 artwork: album.artworkPath, inNewTab: inNewTab)
-        }
+        push(focus.map { .albumRef(AlbumRef(album: album, focusPath: $0)) } ?? .album(album),
+             inNewTab: inNewTab)
     }
 
     func openFolder(_ url: URL, inNewTab: Bool = false) {
-        push(FolderRef(url: url), named: url.lastPathComponent, kind: .folder, inNewTab: inNewTab)
+        push(.folder(FolderRef(url: url)), inNewTab: inNewTab)
     }
 
     // MARK: - Persistence
@@ -185,23 +167,5 @@ final class MacRouter {
             .compactMap(BrowseTab.init(snapshot:))
         guard !saved.isEmpty else { return ([BrowseTab(slot: .albums)], 0) }
         return (saved, max(0, UserDefaults.standard.integer(forKey: activeKey)))
-    }
-}
-
-extension View {
-    /// Name the tab after this page for as long as it is showing.
-    func tabTitle(_ title: String, kind: PageKind, artwork: String? = nil) -> some View {
-        modifier(TabTitle(title: title, kind: kind, artwork: artwork))
-    }
-}
-
-private struct TabTitle: ViewModifier {
-    @Environment(MacRouter.self) private var router
-    let title: String
-    let kind: PageKind
-    let artwork: String?
-
-    func body(content: Content) -> some View {
-        content.onAppear { router.nameCurrentPage(title, kind: kind, artwork: artwork) }
     }
 }

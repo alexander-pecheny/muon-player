@@ -22,14 +22,14 @@ struct AlbumsView: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(filtered) { album in
-                        NavigationLink(value: album) {
+                        NavigationLink(value: Route.album(album)) {
                             AlbumCell(album: album)
                         }
                         .buttonStyle(.plain)
                         // A cell's tap already opens the album, so the artist link
                         // has to live in the long-press menu.
                         .contextMenu {
-                            Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+                            Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
                                 Label("Go to Artist", systemImage: "music.mic")
                             }
                         }

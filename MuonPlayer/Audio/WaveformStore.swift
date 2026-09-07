@@ -8,25 +8,38 @@ actor WaveformStore {
     static let shared = WaveformStore()
 
     /// Number of bars in a generated waveform.
-    static let bucketCount = 220
+    static let bucketCount = 1000
 
-    private var cache: [String: [Float]] = [:]
+    /// Finished waveforms, readable without an await: a view rebuilt as the app
+    /// heads for the background is snapshotted before an await comes back.
+    private let ready = ReadyCache()
     private var inFlight: [String: Task<[Float], Never>] = [:]
+    private var database: Database?
+
+    /// Where finished waveforms are kept between launches.
+    func attach(_ database: Database) { self.database = database }
+
+    nonisolated func peek(_ url: URL) -> [Float]? { ready.get(url.path) }
 
     /// Return the waveform for `url` (normalized 0...1 peaks), generating it if
     /// needed. Concurrent requests for the same track share one decode.
     func waveform(for url: URL, duration: TimeInterval) async -> [Float] {
         let key = url.path
-        if let cached = cache[key] { return cached }
+        if let cached = ready.get(key) { return cached }
         if let running = inFlight[key] { return await running.value }
+        if let saved = await database?.waveform(forPath: key), saved.count == Self.bucketCount {
+            ready.set(key, saved)
+            return saved
+        }
 
         let task = Task<[Float], Never>.detached(priority: .utility) {
             Self.generate(url: url, duration: duration, buckets: Self.bucketCount)
         }
         inFlight[key] = task
         let result = await task.value
-        cache[key] = result
+        ready.set(key, result)
         inFlight[key] = nil
+        if !result.isEmpty { await database?.saveWaveform(path: key, peaks: result) }
         return result
     }
 
@@ -74,4 +87,11 @@ actor WaveformStore {
         guard maxPeak > 0 else { return peaks }
         return peaks.map { min(1, max(0.04, $0 / maxPeak)) }
     }
+}
+
+private final class ReadyCache: @unchecked Sendable {
+    private var store: [String: [Float]] = [:]
+    private let lock = NSLock()
+    func get(_ key: String) -> [Float]? { lock.withLock { store[key] } }
+    func set(_ key: String, _ value: [Float]) { lock.withLock { store[key] = value } }
 }

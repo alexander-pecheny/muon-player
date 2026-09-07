@@ -191,8 +191,6 @@ A tab is a whole browsing context — `BrowseTab` in `MuonPlayerMac/MacRouter.sw
 sidebar section, the search query and a navigation path per section, so the sidebar changes
 the active tab rather than the window. ⌘T and the + open one, ⌘1…⌘9 select (⌘9 is the last),
 ⌘-click or the context menu opens a link in a background tab, and the × or ⌘W closes one.
-Open sections are restored on launch; navigation history is not, since `NavigationPath`
-holds arbitrary values, so a tab comes back at its section root.
 
 Two traps. The strip sits **above** the `NavigationSplitView`, spanning the window, and not
 in the detail column where it belongs visually: anything wrapping or beside that column's
@@ -202,9 +200,14 @@ a `.keyboardShortcut`, because File → Close already owns it and AppKit resolve
 `CloseTabKeyMonitor` takes the key from a local event monitor and hands it back when there
 is only one tab left, the same trick `SpaceKeyMonitor` uses.
 
-A tab names itself after the page it shows. `NavigationPath` will not say what is in it, so
-each destination reports its own name with `.tabTitle(_:)` and the path binding truncates
-that trail on a pop.
+A tab is named after the page it shows, and reads that name off its own stack: a path is
+`[Route]` — one case per kind of page, each with a `title`, a `kind` and a cover — so the
+tab's name is just `path.last`. It used to be the other way round: a `NavigationPath` says
+nothing about what is in it, so every destination reported itself from `onAppear` and wrote
+the crumb at `path.count - 1`. That index is only right when the page appearing is the top
+of the stack, which it is not when several appear at once (a restored stack, or one
+re-identified by a tab switch) nor during a cancelled swipe-back, where the parent appears
+while the child is still on top. Both wrote the parent's name over the child's.
 
 On **iOS** the same `BrowseContext` sits under `TabRouter`, and the bottom bar picks the slot
 within the active context exactly as the macOS sidebar does — so every context keeps its own
@@ -218,12 +221,10 @@ anything past the fourth slot is folded into our own More tab. So a new tab land
 with Home *pushed* onto it, rather than on the More list.
 
 Both platforms restore the tabs whole — the slot **and** the stack behind it — by encoding
-each `NavigationPath` through its `CodableRepresentation`, which is why `Album` and the three
-navigation refs conform to `Codable`. Saving the slot alone was not enough: every tab came
-back at its section root, so an album tab reopened as "Albums" and the tabs were restored in
-name only. A page reporting no cover never erases one already recorded for it, because an
-artist's cover is looked up in the library and that page reappears, on the launch after a
-restore, before the library has finished loading.
+`[Route]`, which is why `Album` and the three navigation refs conform to `Codable`. Saving
+the slot alone was not enough: every tab came back at its section root, so an album tab
+reopened as "Albums" and the tabs were restored in name only. An artist page carries no
+cover of its own; the switcher card looks one of their albums up in the library.
 
 ### When the library rescans
 

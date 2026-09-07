@@ -53,6 +53,10 @@ final class Player {
     /// point or 4 min). Lets the scrobble be submitted immediately rather than
     /// waiting for the track to change.
     var onScrobbleEligible: ((Track) -> Void)?
+    /// Fired every five seconds of playback and on pause, with how long the
+    /// current track has played and where the playhead is.
+    var onTrackProgress: ((Track, TimeInterval, TimeInterval) -> Void)?
+    private var progressReported: TimeInterval = 0
     // Guards `onScrobbleEligible` to one emission per play; re-armed on each
     // new (or restarted) track.
     private var eligibleReported = false
@@ -220,6 +224,23 @@ final class Player {
     func pause() {
         node.pause()
         isPlaying = false
+        reportProgress()
+        updateNowPlayingInfo()
+    }
+
+    /// Bring `track` back as the current track without starting it: the engine
+    /// stays down, and `resume()` starts it from `time`.
+    func restore(track: Track, context: [Track], at time: TimeInterval) {
+        guard currentTrack == nil else { return }
+        albumContext = context
+        _ = queue.setContext(context, startIndex: context.firstIndex { $0.url == track.url } ?? 0)
+        applyLoopFlags()
+        timelineBuilt = false
+        currentTrack = track
+        duration = track.duration ?? 0
+        currentTime = time
+        loadArtwork(for: track)
+        refreshUpNext()
         updateNowPlayingInfo()
     }
 
@@ -284,7 +305,24 @@ final class Player {
     func clearQueue() { queue.clearQueue(); refreshUpNext() }
     private func refreshUpNext() {
         upNext = queue.queuedItems()
-        nextUpTrack = queue.peekNext()
+        let next = queue.peekNext()
+        if next?.url != nextUpTrack?.url { prefetch(next) }
+        nextUpTrack = next
+    }
+
+    /// Decode the next track's waveform and cover while the current one still
+    /// plays: at a gapless seam the UI switches on the same tick as the audio,
+    /// and anything loaded only then would pop in a moment late.
+    private func prefetch(_ track: Track?) {
+        guard let track else { return }
+        if let duration = track.duration, duration > 0 {
+            Task.detached(priority: .utility) {
+                _ = await WaveformStore.shared.waveform(for: track.url, duration: duration)
+            }
+        }
+        if track.hasArtwork, let library {
+            Task { _ = await ArtworkCache.shared.load(path: track.url.path, from: library) }
+        }
     }
 
     // MARK: - Playback core
@@ -306,6 +344,7 @@ final class Player {
         lastReportedTrackID = nil
         eligibleReported = false
         playedAccumulator = 0
+        progressReported = 0
 
         // Bump the generation *before* stopping the node. The feeder checks the
         // generation on every scheduling iteration (see feedIfNeeded), so any
@@ -393,7 +432,9 @@ final class Player {
             currentDecoder = nil
             return nil
         }
-        DispatchQueue.main.async { [weak self] in self?.refreshUpNext() }
+        // No refreshUpNext here: the decoder crosses the seam seconds before the
+        // audio does, and Up Next must not flip while the old track is audible.
+        // tick() refreshes it when the playhead reaches the new segment.
         openDecoder(for: nextTrack, offset: 0, generation: gen)
         return currentDecoder?.nextBuffer()
     }
@@ -497,6 +538,7 @@ final class Player {
             reportedTrackStartFrame = seg.startFrame
             eligibleReported = false
             playedAccumulator = 0
+            progressReported = 0
             currentTrack = seg.track
             duration = seg.duration
             onTrackStarted?(seg.track)
@@ -519,7 +561,14 @@ final class Player {
         if delta > 0, delta < 2 { playedAccumulator += delta }
         currentTime = newTime
         maybeReportEligible()
+        if playedAccumulator - progressReported >= 5 { reportProgress() }
         updateNowPlayingInfo()
+    }
+
+    private func reportProgress() {
+        guard let track = currentTrack else { return }
+        progressReported = playedAccumulator
+        onTrackProgress?(track, playedAccumulator, currentTime)
     }
 
     /// Emit `onScrobbleEligible` the first time the current track has been played

@@ -29,7 +29,7 @@ struct ArtistsView: View {
     var body: some View {
         List {
             ForEach(artists) { artist in
-                NavigationLink(value: ArtistRef(name: artist.name)) {
+                NavigationLink(value: Route.artist(ArtistRef(name: artist.name))) {
                     HStack(spacing: 12) {
                         ArtworkView(path: artist.artworkPath, cornerRadius: 6)
                             .frame(width: 48, height: 48)

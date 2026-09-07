@@ -16,7 +16,7 @@ struct MacArtistsView: View {
 
     var body: some View {
         List(artists) { artist in
-            NavigationLink(value: ArtistRef(name: artist.name)) {
+            NavigationLink(value: Route.artist(ArtistRef(name: artist.name))) {
                 HStack(spacing: 10) {
                     ArtworkView(path: artist.artworkPath, cornerRadius: 18)
                         .frame(width: 36, height: 36)

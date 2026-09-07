@@ -38,7 +38,7 @@ struct MacSearchResultsView: View {
             if !results.artists.isEmpty {
                 Section("Artists") {
                     ForEach(results.artists) { artist in
-                        NavigationLink(value: ArtistRef(name: artist.name)) {
+                        NavigationLink(value: Route.artist(ArtistRef(name: artist.name))) {
                             HStack(spacing: 10) {
                                 ArtworkView(path: artist.artworkPath, cornerRadius: 16)
                                     .frame(width: 32, height: 32)
@@ -56,7 +56,7 @@ struct MacSearchResultsView: View {
             if !results.albums.isEmpty {
                 Section("Albums") {
                     ForEach(results.albums) { album in
-                        NavigationLink(value: album) {
+                        NavigationLink(value: Route.album(album)) {
                             HStack(spacing: 10) {
                                 ArtworkView(path: album.artworkPath, cornerRadius: 3)
                                     .frame(width: 32, height: 32)

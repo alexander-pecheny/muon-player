@@ -50,6 +50,9 @@ struct ArtworkView: View {
     var cornerRadius: CGFloat = 6
     /// Cap on the decoded size. Raise it for art shown larger than a thumbnail.
     var maxPixel: Int = 400
+    /// `.fit` letterboxes a non-square cover instead of cropping it; used where
+    /// the art is shown large.
+    var contentMode: ContentMode = .fill
 
     @Environment(LibraryStore.self) private var library
     @State private var image: PlatformImage?
@@ -57,15 +60,15 @@ struct ArtworkView: View {
     var body: some View {
         // The clear Rectangle takes whatever size the parent proposes (it does
         // not propagate the image's own aspect ratio), so a caller's
-        // `.aspectRatio(1, .fit)` yields a true square and the filled artwork is
-        // center-cropped to it — no letterboxing for non-square covers.
+        // `.aspectRatio(1, .fit)` yields a true square, into which the cover is
+        // cropped or letterboxed according to `contentMode`.
         Rectangle()
             .fill(Color.clear)
             .overlay {
                 if let image {
                     Image(platformImage: image)
                         .resizable()
-                        .scaledToFill()
+                        .aspectRatio(contentMode: contentMode)
                 } else {
                     placeholder
                 }

@@ -24,7 +24,7 @@ struct ArtistView: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(albums) { album in
-                    NavigationLink(value: album) {
+                    NavigationLink(value: Route.album(album)) {
                         VStack(alignment: .leading, spacing: 6) {
                             ArtworkView(path: album.artworkPath)
                                 .aspectRatio(1, contentMode: .fit)

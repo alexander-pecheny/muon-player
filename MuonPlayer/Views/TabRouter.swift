@@ -64,6 +64,10 @@ final class TabRouter {
     init() {
         let saved = (UserDefaults.standard.array(forKey: Self.key) as? [Data] ?? [])
             .compactMap(Context.init(snapshot:))
+        let documents = LibraryRoot.documents.path
+        for context in saved {
+            context.paths = context.paths.mapValues { $0.map { $0.rehomed(documents: documents) } }
+        }
         restored = !saved.isEmpty
         let open = saved.isEmpty ? [Context(slot: .tab(.albums))] : saved
         contexts = open
@@ -77,22 +81,14 @@ final class TabRouter {
         set { active.slot = newValue; persist() }
     }
 
-    func path(for slot: TabSelection) -> Binding<NavigationPath> {
+    func path(for slot: TabSelection) -> Binding<[Route]> {
         Binding(
-            get: { self.active.paths[slot] ?? NavigationPath() },
+            get: { self.active.paths[slot] ?? [] },
             set: { new in
                 self.active.paths[slot] = new
-                if slot == self.active.slot { self.active.truncateCrumbs(to: new.count) }
                 self.persist()
             }
         )
-    }
-
-    /// Called by a pushed page to name itself, which is what its tab is called
-    /// while that page is showing.
-    func nameCurrentPage(_ title: String, kind: PageKind, artwork: String? = nil) {
-        active.name(title, kind: kind, artwork: artwork)
-        persist()
     }
 
     // MARK: - Tabs
@@ -103,7 +99,7 @@ final class TabRouter {
     func newTab(_ settings: TabSettings) {
         let slot = settings.reachable(.tab(.home))
         let context = Context(slot: slot)
-        if slot == .more { context.push(AppTab.home, named: AppTab.home.title, kind: .section) }
+        if slot == .more { context.push(.section(AppTab.home.rawValue)) }
         contexts.insert(context, at: (contexts.firstIndex { $0.id == activeID } ?? contexts.count - 1) + 1)
         activeID = context.id
         persist()
@@ -144,44 +140,42 @@ final class TabRouter {
 
     // MARK: - Deep links
 
-    func openArtist(_ name: String, artwork: String? = nil) {
-        active.push(ArtistRef(name: name), named: name, kind: .artist, artwork: artwork)
+    func openArtist(_ name: String) {
+        active.push(.artist(ArtistRef(name: name)))
         persist()
     }
 
     /// `focus` is the path of a track to scroll to — set when the user tapped a
     /// song name rather than an album name.
     func openAlbum(_ album: Album, focus: String? = nil) {
-        if let focus {
-            active.push(AlbumRef(album: album, focusPath: focus),
-                        named: album.title, kind: .album, artwork: album.artworkPath)
-        } else {
-            active.push(album, named: album.title, kind: .album, artwork: album.artworkPath)
-        }
+        active.push(focus.map { .albumRef(AlbumRef(album: album, focusPath: $0)) } ?? .album(album))
         persist()
     }
 
     func openFolder(_ url: URL) {
-        active.push(FolderRef(url: url), named: url.lastPathComponent, kind: .folder)
+        active.push(.folder(FolderRef(url: url)))
         persist()
     }
 }
 
-extension View {
-    /// Name the tab after this page, and give it a cover, for as long as it is
-    /// showing.
-    func tabTitle(_ title: String, kind: PageKind, artwork: String? = nil) -> some View {
-        modifier(TabTitle(title: title, kind: kind, artwork: artwork))
-    }
-}
-
-private struct TabTitle: ViewModifier {
-    @Environment(TabRouter.self) private var router
-    let title: String
-    let kind: PageKind
-    let artwork: String?
-
-    func body(content: Content) -> some View {
-        content.onAppear { router.nameCurrentPage(title, kind: kind, artwork: artwork) }
+/// iOS moves the app's data container on every install. The library rewrites its
+/// paths at launch to follow it (`normalizeContainerPaths`); a restored route
+/// carries the old ones and has to follow too.
+private extension Route {
+    func rehomed(documents: String) -> Route {
+        func move(_ path: String) -> String {
+            guard let range = path.range(of: "/Documents/") else { return path }
+            return documents + "/" + path[range.upperBound...]
+        }
+        func move(_ album: Album) -> Album {
+            Album(title: album.title, artist: album.artist, trackCount: album.trackCount,
+                  year: album.year, artworkPath: album.artworkPath.map(move))
+        }
+        switch self {
+        case .album(let album): return .album(move(album))
+        case .albumRef(let ref): return .albumRef(AlbumRef(album: move(ref.album), focusPath: move(ref.focusPath)))
+        case .folder(let ref): return .folder(FolderRef(url: URL(fileURLWithPath: move(ref.url.path))))
+        case .artist, .section: return self
+        }
     }
 }

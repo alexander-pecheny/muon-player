@@ -13,6 +13,8 @@ struct AlbumDetailView: View {
     @State private var editingAlbum = false
     @State private var editingTrack: Track?
     @State private var didFocus = false
+    @State private var loaded = false
+    @State private var zoomingArtwork = false
     // This album's own artwork color, independent of what's playing — so a red
     // album never gets tinted by a green now-playing track (and vice versa).
     @State private var albumAccent: Color = .neutralAccent
@@ -33,15 +35,16 @@ struct AlbumDetailView: View {
         List {
             Section {
                 VStack(spacing: 12) {
-                    ArtworkView(path: album.artworkPath, cornerRadius: 12)
+                    ArtworkView(path: album.artworkPath, cornerRadius: 12, contentMode: .fit)
                         .aspectRatio(1, contentMode: .fit)
                         .frame(maxWidth: 320)
                         .shadow(radius: 8, y: 4)
                         .padding(.top, 8)
+                        .onTapGesture { zoomingArtwork = album.artworkPath != nil }
 
                     VStack(spacing: 2) {
                         Text(album.title).font(.title3.bold()).multilineTextAlignment(.center)
-                        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+                        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
                             Text(album.artist).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                         .buttonStyle(.plain)
@@ -119,9 +122,12 @@ struct AlbumDetailView: View {
             }
         }
         .sheet(isPresented: $editingAlbum) { TagEditView(scope: .album(album)) }
+        .fullScreenCover(isPresented: $zoomingArtwork) {
+            if let path = album.artworkPath { ArtworkZoomView(path: path) }
+        }
         .sheet(item: $editingTrack) { t in TagEditView(scope: .track(t)) }
         .overlay {
-            if tracks.isEmpty {
+            if loaded && tracks.isEmpty {
                 ContentUnavailableView("Album Is Gone", systemImage: "questionmark.folder",
                                        description: Text("Its files are no longer in the library."))
             }
@@ -149,6 +155,7 @@ struct AlbumDetailView: View {
         }
         album = target
         tracks = loaded
+        self.loaded = true
 
         guard let focusPath, !didFocus, loaded.contains(where: { $0.url.path == focusPath }) else { return }
         didFocus = true
@@ -161,7 +168,7 @@ struct AlbumDetailView: View {
     // MARK: Menus
 
     @ViewBuilder private var albumMenu: some View {
-        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
         Button { for t in tracks { player.enqueue(t, context: tracks) } } label: {
@@ -173,7 +180,7 @@ struct AlbumDetailView: View {
     }
 
     @ViewBuilder private func trackMenu(_ track: Track) -> some View {
-        Button { navPath?.wrappedValue.append(ArtistRef(name: album.artist)) } label: {
+        Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
         Button { player.enqueue(track, context: tracks) } label: {
@@ -194,9 +201,12 @@ struct AlbumDetailView: View {
     }
 
     private var trackCountLine: String {
-        let count = "\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")"
-        guard let year = album.year else { return count }
-        return "\(year) · \(count)"
+        var parts: [String] = []
+        if let year = album.year { parts.append(String(year)) }
+        parts.append("\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")")
+        let total = tracks.compactMap(\.duration).reduce(0, +)
+        if total > 0 { parts.append(formatDuration(total)) }
+        return parts.joined(separator: " · ")
     }
 
     /// Item #5: format + bitrate summary for the album.

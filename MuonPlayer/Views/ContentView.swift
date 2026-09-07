@@ -33,11 +33,17 @@ struct ContentView: View {
     }
 
     // The mini-player is gated on `currentTrack` so there's no empty glass
-    // accessory / inset before anything has played. Tab selection and pushed
-    // navigation live in the external `router` (@Observable), so the TabView
-    // rebuild when the accessory first appears re-reads them and nothing resets.
+    // accessory / inset before anything has played. The gate must not change
+    // the view tree: swapping the modifier in rebuilds the TabView, and every
+    // pushed page comes back with empty state and reloads in view — an album
+    // page flashed "Album Is Gone" whenever a track started. Only iOS 26.0,
+    // which lacks the flag, still pays that.
     @ViewBuilder private var content: some View {
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.1, *) {
+            tabs.tabViewBottomAccessory(isEnabled: player.currentTrack != nil) {
+                MiniAccessory(onTap: { showNowPlaying = true })
+            }
+        } else if #available(iOS 26.0, *) {
             if player.currentTrack != nil {
                 tabs.tabViewBottomAccessory {
                     MiniAccessory(onTap: { showNowPlaying = true })
@@ -107,14 +113,11 @@ private struct MoreTab: View {
         let path = router.path(for: .more)
         NavigationStack(path: path) {
             List(tabs) { tab in
-                NavigationLink(value: tab) {
+                NavigationLink(value: Route.section(tab.rawValue)) {
                     Label(tab.title, systemImage: tab.systemImage)
                 }
             }
             .navigationTitle("More")
-            .navigationDestination(for: AppTab.self) {
-                TabRootView(tab: $0).tabCountToolbar()
-            }
             .tabCountToolbar()
             .modifier(CommonDestinations())
         }
@@ -167,100 +170,33 @@ private struct ScanStatusCapsule: View {
     }
 }
 
-/// Value-based destinations registered once per navigation stack.
+/// Every pushed page, registered once per navigation stack.
 private struct CommonDestinations: ViewModifier {
-    @Environment(LibraryStore.self) private var library
-
-    /// An artist has no art of its own; the app shows one of their covers, and
-    /// the tab card follows suit.
-    private func artistArtwork(_ name: String) -> String? {
-        library.albums.first { $0.artist == name && $0.artworkPath != nil }?.artworkPath
-    }
-
     func body(content: Content) -> some View {
-        content
-            .navigationDestination(for: Album.self) {
-                AlbumDetailView(album: $0).tabTitle($0.title, kind: .album, artwork: $0.artworkPath).tabCountToolbar()
+        content.navigationDestination(for: Route.self) { route in
+            Group {
+                switch route {
+                case .album(let album): AlbumDetailView(album: album)
+                case .albumRef(let ref): AlbumDetailView(album: ref.album, focusPath: ref.focusPath)
+                case .artist(let ref): ArtistView(artist: ref.name)
+                case .folder(let ref): FoldersView(directory: ref.url)
+                case .section(let raw): TabRootView(tab: AppTab(rawValue: raw) ?? .home)
+                }
             }
-            .navigationDestination(for: AlbumRef.self) {
-                AlbumDetailView(album: $0.album, focusPath: $0.focusPath)
-                    .tabTitle($0.album.title, kind: .album, artwork: $0.album.artworkPath)
-                    .tabCountToolbar()
-            }
-            .navigationDestination(for: ArtistRef.self) {
-                ArtistView(artist: $0.name)
-                    .tabTitle($0.name, kind: .artist, artwork: artistArtwork($0.name))
-                    .tabCountToolbar()
-            }
-            .navigationDestination(for: FolderRef.self) {
-                FoldersView(directory: $0.url)
-                    .tabTitle($0.url.lastPathComponent, kind: .folder).tabCountToolbar()
-            }
+            .tabCountToolbar()
+        }
     }
 }
 
 /// Lets a deeply-pushed view (e.g. AlbumDetailView's "Go to Artist") push onto
 /// its enclosing tab stack without registering its own `navigationDestination`.
 private struct NavPathKey: EnvironmentKey {
-    static let defaultValue: Binding<NavigationPath>? = nil
+    static let defaultValue: Binding<[Route]>? = nil
 }
 
 extension EnvironmentValues {
-    var navPath: Binding<NavigationPath>? {
+    var navPath: Binding<[Route]>? {
         get { self[NavPathKey.self] }
         set { self[NavPathKey.self] = newValue }
-    }
-}
-
-/// Compact now-playing content for the iOS 26 tab-view bottom accessory. The
-/// accessory itself provides the glass background.
-private struct MiniAccessory: View {
-    @Environment(Player.self) private var player
-    var onTap: () -> Void
-
-    var body: some View {
-        VStack(spacing: 3) {
-            HStack(spacing: 10) {
-                artwork
-                    .frame(width: 32, height: 32)
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(player.currentTrack?.title ?? "")
-                        .font(.system(size: 14.5, weight: .medium)).lineLimit(1)
-                    if let artist = player.currentTrack?.artist {
-                        Text(artist).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 4)
-
-                Button { player.previous() } label: {
-                    Image(systemName: "backward.fill").font(.title3)
-                }
-                .buttonStyle(.plain)
-                Button { player.togglePlayPause() } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.title3)
-                }
-                .buttonStyle(.plain)
-                Button { player.next() } label: {
-                    Image(systemName: "forward.fill").font(.title3)
-                }
-                .buttonStyle(.plain)
-            }
-            MiniWaveform(height: 12)
-        }
-        // Lift the row off the accessory's top edge and sit it nearer the waveform.
-        .padding(.top, 6)
-        .padding(.horizontal, 12)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
-    }
-
-    @ViewBuilder private var artwork: some View {
-        if let art = player.currentArtwork {
-            Image(uiImage: art).resizable().aspectRatio(contentMode: .fill)
-        } else {
-            ArtworkView(path: player.currentTrack?.url.path, cornerRadius: 5)
-        }
     }
 }

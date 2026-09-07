@@ -19,6 +19,59 @@ enum PageKind: String, Codable {
     }
 }
 
+/// A page on a navigation stack. The stack is `[Route]` rather than a
+/// `NavigationPath` so a tab can read its own title off the top of it, instead
+/// of each page reporting its name as it appears: several pages appear at once
+/// when a stack is restored or re-identified, and a cancelled swipe-back
+/// re-appears the parent while the child is still on top. Both wrote the wrong
+/// page's name over the top one's.
+enum Route: Hashable, Codable {
+    case album(Album)
+    case albumRef(AlbumRef)
+    case artist(ArtistRef)
+    case folder(FolderRef)
+    /// An `AppTab` raw value — `AppTab` is iOS-only, so the shared enum keeps the
+    /// string.
+    case section(String)
+
+    var title: String {
+        switch self {
+        case .album(let album): return album.title
+        case .albumRef(let ref): return ref.album.title
+        case .artist(let ref): return ref.name
+        case .folder(let ref): return ref.url.lastPathComponent
+        case .section(let raw): return sectionTitle(raw)
+        }
+    }
+
+    var kind: PageKind {
+        switch self {
+        case .album, .albumRef: return .album
+        case .artist: return .artist
+        case .folder: return .folder
+        case .section: return .section
+        }
+    }
+
+    /// nil for an artist: they have no cover of their own, so the switcher looks
+    /// one of their albums up in the library.
+    var artworkPath: String? {
+        switch self {
+        case .album(let album): return album.artworkPath
+        case .albumRef(let ref): return ref.album.artworkPath
+        case .artist, .folder, .section: return nil
+        }
+    }
+
+    private func sectionTitle(_ raw: String) -> String {
+        #if os(iOS)
+        return AppTab(rawValue: raw)?.title ?? raw
+        #else
+        return raw
+        #endif
+    }
+}
+
 /// A slot a browsing context can be parked in — a sidebar section on macOS, a
 /// bottom-bar tab on iOS.
 protocol BrowseSlot: Hashable {
@@ -43,54 +96,17 @@ final class BrowseContext<Slot: BrowseSlot>: Identifiable {
     /// switching tabs brings its search back with it.
     var searchQuery = ""
 
-    var paths: [Slot: NavigationPath] = [:]
-
-    /// What each page pushed onto the current slot's path is called, and the
-    /// cover to show for it. `NavigationPath` will not say what is in it, so the
-    /// destinations report themselves (`tabTitle`).
-    struct Crumb: Codable {
-        let name: String
-        let kind: PageKind
-        let artworkPath: String?
-    }
-
-    var crumbs: [Slot: [Crumb]] = [:]
+    var paths: [Slot: [Route]] = [:]
 
     init(slot: Slot) { self.slot = slot }
 
-    var title: String { crumbs[slot]?.last?.name ?? slot.defaultTitle }
-    var kind: PageKind? { crumbs[slot]?.last?.kind }
-    var artworkPath: String? { crumbs[slot]?.last?.artworkPath }
+    var path: [Route] { paths[slot] ?? [] }
 
-    var path: NavigationPath { paths[slot] ?? NavigationPath() }
+    var title: String { path.last?.title ?? slot.defaultTitle }
+    var kind: PageKind? { path.last?.kind }
+    var artworkPath: String? { path.last?.artworkPath }
 
-    /// Record the page now on top, and drop crumbs left behind by a pop.
-    func name(_ title: String, kind: PageKind, artwork: String? = nil) {
-        var names = crumbs[slot] ?? []
-        let depth = path.count
-        guard depth > 0 else { return }
-        // A page that reports no art must not erase art we already had for it: an
-        // artist's cover is looked up in the library, and on the launch after a
-        // restore that page reappears before the library has finished loading.
-        let existing = names.count >= depth ? names[depth - 1] : nil
-        let keptArt = artwork ?? (existing?.name == title ? existing?.artworkPath : nil)
-        let crumb = Crumb(name: title, kind: kind, artworkPath: keptArt)
-        if names.count < depth { names.append(crumb) } else { names[depth - 1] = crumb }
-        crumbs[slot] = names
-    }
-
-    func truncateCrumbs(to depth: Int) {
-        if let names = crumbs[slot], names.count > depth {
-            crumbs[slot] = Array(names.prefix(depth))
-        }
-    }
-
-    func push<V: Hashable>(_ value: V, named title: String, kind: PageKind, artwork: String? = nil) {
-        var p = paths[slot] ?? NavigationPath()
-        p.append(value)
-        paths[slot] = p
-        crumbs[slot] = (crumbs[slot] ?? []) + [Crumb(name: title, kind: kind, artworkPath: artwork)]
-    }
+    func push(_ route: Route) { paths[slot, default: []].append(route) }
 }
 
 // MARK: - Saving and restoring
@@ -101,39 +117,23 @@ extension BrowseContext {
     ///
     /// The stack is the point. Persisting the slot alone brought every tab back
     /// at its section root, so an album tab reopened as "Albums" — the tabs were
-    /// restored in name only. `NavigationPath` will encode itself as long as every
-    /// value in it is `Codable`, which is why `Album` and the three refs are.
+    /// restored in name only.
     private struct Snapshot: Codable {
         let slot: String
-        let paths: [String: Data]
-        let crumbs: [String: [Crumb]]
+        let paths: [String: [Route]]
     }
 
     func snapshot() -> Data? {
-        var encodedPaths: [String: Data] = [:]
-        for (slot, path) in paths {
-            guard let codable = path.codable,
-                  let data = try? JSONEncoder().encode(codable) else { continue }
-            encodedPaths[slot.storageKey] = data
-        }
-        let crumbsByKey = Dictionary(uniqueKeysWithValues: crumbs.map { ($0.key.storageKey, $0.value) })
-        return try? JSONEncoder().encode(
-            Snapshot(slot: slot.storageKey, paths: encodedPaths, crumbs: crumbsByKey))
+        let byKey = Dictionary(uniqueKeysWithValues: paths.map { ($0.key.storageKey, $0.value) })
+        return try? JSONEncoder().encode(Snapshot(slot: slot.storageKey, paths: byKey))
     }
 
     convenience init?(snapshot data: Data) {
         guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
               let slot = Slot(storageKey: snapshot.slot) else { return nil }
         self.init(slot: slot)
-
-        for (key, data) in snapshot.paths {
-            guard let slot = Slot(storageKey: key),
-                  let codable = try? JSONDecoder().decode(NavigationPath.CodableRepresentation.self, from: data)
-            else { continue }
-            paths[slot] = NavigationPath(codable)
-        }
-        for (key, value) in snapshot.crumbs {
-            if let slot = Slot(storageKey: key) { crumbs[slot] = value }
+        for (key, routes) in snapshot.paths {
+            if let slot = Slot(storageKey: key) { paths[slot] = routes }
         }
     }
 }

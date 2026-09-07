@@ -15,6 +15,7 @@ struct MacAlbumDetailView: View {
     @State private var size: CGSize = .zero
     @Environment(\.openWindow) private var openWindow
     @State private var didFocus = false
+    @State private var loaded = false
     // This album's own artwork color, independent of what's playing — so a red
     // album never gets tinted by a green now-playing track (and vice versa).
     @State private var albumAccent: Color = .neutralAccent
@@ -68,7 +69,7 @@ struct MacAlbumDetailView: View {
                 }
                 .listStyle(.inset)
                 .overlay {
-                    if tracks.isEmpty {
+                    if loaded && tracks.isEmpty {
                         ContentUnavailableView("Album Is Gone", systemImage: "questionmark.folder",
                                                description: Text("Its files are no longer in the library."))
                     }
@@ -180,6 +181,7 @@ struct MacAlbumDetailView: View {
         }
         album = target
         tracks = loaded
+        self.loaded = true
 
         guard let focusPath, !didFocus, loaded.contains(where: { $0.url.path == focusPath }) else { return }
         didFocus = true
@@ -227,7 +229,7 @@ struct MacAlbumDetailView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 18) {
-            ArtworkView(path: album.artworkPath, cornerRadius: 8, maxPixel: 900)
+            ArtworkView(path: album.artworkPath, cornerRadius: 8, maxPixel: 900, contentMode: .fit)
                 .frame(width: 336, height: 336)
                 .shadow(radius: 6, y: 3)
                 .onTapGesture {
