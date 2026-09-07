@@ -77,13 +77,16 @@ final class LibraryStore {
         roots.first { $0.relativePath(of: path) != nil }
     }
 
-    func loadFromDatabase() async {
+    /// The data-container UUID changes on every iOS install/update, so every
+    /// stored absolute path goes stale. Rewrite them to the current container
+    /// before any path query runs. macOS roots are user-chosen and stable.
+    func rehomePaths() async {
         #if os(iOS)
-        // The data-container UUID changes on every install/update, so every stored
-        // absolute path goes stale. Rewrite them to the current container before
-        // any path-prefix query runs. macOS roots are user-chosen and stable.
         await database.normalizeContainerPaths(currentDocuments: LibraryRoot.documents.path)
         #endif
+    }
+
+    func loadFromDatabase() async {
         albums = await database.albums()
         reindexAlbums()
         trackCount = await database.trackCount()
@@ -338,6 +341,10 @@ final class LibraryStore {
 
     func tracks(in album: Album) async -> [Track] {
         await database.tracks(inAlbum: album)
+    }
+
+    func track(atPath path: String) async -> Track? {
+        await database.track(atPath: path)
     }
 
     /// The album a track is filed under, as the album list groups them. The year

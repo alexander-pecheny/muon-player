@@ -13,6 +13,7 @@ struct AlbumDetailView: View {
     @State private var editingAlbum = false
     @State private var editingTrack: Track?
     @State private var didFocus = false
+    @State private var loaded = false
     @State private var zoomingArtwork = false
     // This album's own artwork color, independent of what's playing — so a red
     // album never gets tinted by a green now-playing track (and vice versa).
@@ -126,7 +127,7 @@ struct AlbumDetailView: View {
         }
         .sheet(item: $editingTrack) { t in TagEditView(scope: .track(t)) }
         .overlay {
-            if tracks.isEmpty {
+            if loaded && tracks.isEmpty {
                 ContentUnavailableView("Album Is Gone", systemImage: "questionmark.folder",
                                        description: Text("Its files are no longer in the library."))
             }
@@ -154,6 +155,7 @@ struct AlbumDetailView: View {
         }
         album = target
         tracks = loaded
+        self.loaded = true
 
         guard let focusPath, !didFocus, loaded.contains(where: { $0.url.path == focusPath }) else { return }
         didFocus = true

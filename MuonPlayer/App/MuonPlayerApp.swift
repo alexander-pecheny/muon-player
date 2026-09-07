@@ -45,8 +45,9 @@ struct MuonPlayerApp: App {
                     await WaveformStore.shared.attach(library.database)
                     scrobbler.start()
                     DemoLibrary.seedIfNeeded()
-                    await library.loadFromDatabase()
+                    await library.rehomePaths()
                     await restoreLastPlayed(player, from: library)
+                    await library.loadFromDatabase()
                     await library.rescan()
 
                     if GaplessSelfTest.isEnabled {
