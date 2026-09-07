@@ -61,6 +61,20 @@ struct WaveformShape: Shape {
         let count = max(1, Int(rect.width / slot))
         let bars = resampled(to: count)
         var path = Path()
+        // Columns that touch are drawn as one envelope through their peaks: a
+        // sloped edge is antialiased, a staircase of rectangles is not.
+        if barSpacing == 0 {
+            let tops = bars.enumerated().map { i, bar in
+                CGPoint(x: rect.minX + (CGFloat(i) + 0.5) * barWidth,
+                        y: rect.midY - max(minBarHeight, CGFloat(bar) * rect.height) / 2)
+            }
+            path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+            for point in tops { path.addLine(to: point) }
+            path.addLine(to: CGPoint(x: rect.minX + CGFloat(count) * barWidth, y: rect.midY))
+            for point in tops.reversed() { path.addLine(to: CGPoint(x: point.x, y: 2 * rect.midY - point.y)) }
+            path.closeSubpath()
+            return path
+        }
         for (i, bar) in bars.enumerated() {
             let height = max(minBarHeight, CGFloat(bar) * rect.height)
             path.addRect(CGRect(x: rect.minX + CGFloat(i) * slot, y: rect.midY - height / 2,

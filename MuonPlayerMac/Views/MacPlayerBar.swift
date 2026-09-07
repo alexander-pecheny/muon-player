@@ -94,31 +94,34 @@ struct MacPlayerBar: View {
     }
 
     private var seekBar: some View {
-        VStack(spacing: 2) {
-            WaveformSeekBar(
-                samples: waveform,
-                progress: progress,
-                onScrub: { scrubFraction = $0 },
-                onCommit: { fraction in
-                    player.seek(to: fraction * player.duration)
-                    scrubFraction = nil
-                },
-                interactive: player.currentTrack != nil,
-                minBarHeight: 2,
-                barWidth: 2,
-                barSpacing: 1.5,
-                accent: player.accentColor
-            )
-            .frame(height: 26)
-            HStack {
-                Text(formatDuration(elapsed))
-                Spacer()
-                Text("-" + formatDuration(max(0, player.duration - elapsed)))
-            }
-            .font(.system(size: 9.5).monospacedDigit())
-            .foregroundStyle(.secondary)
-        }
+        WaveformSeekBar(
+            samples: waveform,
+            progress: progress,
+            onScrub: { scrubFraction = $0 },
+            onCommit: { fraction in
+                player.seek(to: fraction * player.duration)
+                scrubFraction = nil
+            },
+            interactive: player.currentTrack != nil,
+            minBarHeight: 2,
+            accent: player.accentColor
+        )
         .frame(maxWidth: .infinity)
+        .frame(height: 38)
+        .overlay(alignment: .bottomLeading) {
+            timeLabel(formatDuration(elapsed) + " / " + formatDuration(player.duration))
+        }
+        .overlay(alignment: .bottomTrailing) {
+            timeLabel("-" + formatDuration(max(0, player.duration - elapsed)))
+        }
+    }
+
+    private func timeLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9.5).monospacedDigit())
+            .shadow(color: .black.opacity(0.9), radius: 1)
+            .shadow(color: .black.opacity(0.6), radius: 3)
+            .allowsHitTesting(false)
     }
 
     private var trailing: some View {
