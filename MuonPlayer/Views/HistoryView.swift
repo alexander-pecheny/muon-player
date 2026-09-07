@@ -11,10 +11,10 @@ struct HistoryView: View {
     var body: some View {
         List {
             // The track playing right now, updating live above the finished plays.
-            if let track = player.currentTrack {
+            if let track = player.currentTrack, scrobbler.isCounting(track) {
                 nowPlayingRow(track)
             }
-            ForEach(entries) { entry in
+            ForEach(entries.filter { $0.id != scrobbler.currentRow }) { entry in
                 HStack(spacing: 12) {
                     scrobbleIcon(entry.scrobbleState)
                         .frame(width: 20)

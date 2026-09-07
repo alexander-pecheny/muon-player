@@ -53,6 +53,10 @@ final class Player {
     /// point or 4 min). Lets the scrobble be submitted immediately rather than
     /// waiting for the track to change.
     var onScrobbleEligible: ((Track) -> Void)?
+    /// Fired every five seconds of playback and on pause, with how long the
+    /// current track has played and where the playhead is.
+    var onTrackProgress: ((Track, TimeInterval, TimeInterval) -> Void)?
+    private var progressReported: TimeInterval = 0
     // Guards `onScrobbleEligible` to one emission per play; re-armed on each
     // new (or restarted) track.
     private var eligibleReported = false
@@ -220,6 +224,23 @@ final class Player {
     func pause() {
         node.pause()
         isPlaying = false
+        reportProgress()
+        updateNowPlayingInfo()
+    }
+
+    /// Bring `track` back as the current track without starting it: the engine
+    /// stays down, and `resume()` starts it from `time`.
+    func restore(track: Track, context: [Track], at time: TimeInterval) {
+        guard currentTrack == nil else { return }
+        albumContext = context
+        _ = queue.setContext(context, startIndex: context.firstIndex { $0.url == track.url } ?? 0)
+        applyLoopFlags()
+        timelineBuilt = false
+        currentTrack = track
+        duration = track.duration ?? 0
+        currentTime = time
+        loadArtwork(for: track)
+        refreshUpNext()
         updateNowPlayingInfo()
     }
 
@@ -323,6 +344,7 @@ final class Player {
         lastReportedTrackID = nil
         eligibleReported = false
         playedAccumulator = 0
+        progressReported = 0
 
         // Bump the generation *before* stopping the node. The feeder checks the
         // generation on every scheduling iteration (see feedIfNeeded), so any
@@ -516,6 +538,7 @@ final class Player {
             reportedTrackStartFrame = seg.startFrame
             eligibleReported = false
             playedAccumulator = 0
+            progressReported = 0
             currentTrack = seg.track
             duration = seg.duration
             onTrackStarted?(seg.track)
@@ -538,7 +561,14 @@ final class Player {
         if delta > 0, delta < 2 { playedAccumulator += delta }
         currentTime = newTime
         maybeReportEligible()
+        if playedAccumulator - progressReported >= 5 { reportProgress() }
         updateNowPlayingInfo()
+    }
+
+    private func reportProgress() {
+        guard let track = currentTrack else { return }
+        progressReported = playedAccumulator
+        onTrackProgress?(track, playedAccumulator, currentTime)
     }
 
     /// Emit `onScrobbleEligible` the first time the current track has been played

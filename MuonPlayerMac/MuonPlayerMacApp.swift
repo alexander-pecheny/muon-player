@@ -42,6 +42,7 @@ struct MuonPlayerMacApp: App {
                     connectScrobbler(scrobbler, to: player)
                     scrobbler.start()
                     await library.loadFromDatabase()
+                    await restoreLastPlayed(player, from: library)
                     if !folders.isEmpty { await library.rescan() }
 
                     if MacSelfTest.isEnabled {

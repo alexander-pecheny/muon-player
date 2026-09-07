@@ -109,8 +109,16 @@ final class ScrobbleService {
     /// The play currently in progress. Keeps the start timestamp stable and
     /// remembers whether it was already scrobbled, so a single listen scrobbles
     /// at most once and its local-history row records the right state on finish.
-    private struct PlayState { let id: UUID; let startedAt: Int; var scrobbled: Bool }
+    private struct PlayState { let id: UUID; let startedAt: Int; var scrobbled: Bool; var row: Int64? }
     private var play: PlayState?
+
+    /// The history row of the play in progress. It is written the moment a track
+    /// starts and refreshed as it plays, so a killed app still has the listen.
+    private(set) var currentRow: Int64?
+
+    /// Whether `track` is the play being counted, which is what makes it the
+    /// History view's live row rather than a row from the table.
+    func isCounting(_ track: Track) -> Bool { play?.id == track.id }
 
     /// Whether the track playing right now has already been scrobbled this play.
     /// Observable so the History view's live row can flip to a scrobbled state.
@@ -120,8 +128,24 @@ final class ScrobbleService {
         // A genuinely new track arms a fresh play; re-entry for the same track
         // (a seek or replay) keeps its start time and scrobbled flag.
         if play?.id != track.id {
-            play = PlayState(id: track.id, startedAt: Int(Date().timeIntervalSince1970), scrobbled: false)
+            let startedAt = Int(Date().timeIntervalSince1970)
+            play = PlayState(id: track.id, startedAt: startedAt, scrobbled: false, row: nil)
             currentScrobbled = false
+            currentRow = nil
+            let id = track.id
+            Task {
+                let row = await database.insertHistory(
+                    path: track.url.path, artist: track.displayArtist, album: track.album, title: track.title,
+                    playedAt: startedAt, state: .ineligible,
+                    duration: track.duration.map { Int($0.rounded()) }, listened: 0)
+                if play?.id == id {
+                    play?.row = row
+                    currentRow = row
+                } else {
+                    // Skipped before the row landed; the finish wrote its own.
+                    await database.deleteHistory(id: row)
+                }
+            }
         }
         guard isLoggedIn else { return }
         let s = LastFMClient.Scrobble(
@@ -153,12 +177,27 @@ final class ScrobbleService {
         }
     }
 
-    /// Called when a track stops being current. Records it to the local play
-    /// history. The scrobble itself (if any) was already queued mid-playback by
-    /// `scrobbleEligible`, so this only reflects that outcome in the history row.
+    /// Called every few seconds of playback and on pause, so the row has the
+    /// listen so far and where to pick the track up on the next launch.
+    func progressed(_ track: Track, played: TimeInterval, position: TimeInterval) {
+        guard let p = play, p.id == track.id, let row = p.row else { return }
+        Task {
+            await database.updateHistory(id: row, listened: Int(played.rounded()),
+                                         position: Int(position.rounded()), state: nil)
+        }
+    }
+
+    /// Called when a track stops being current. Settles its history row. The
+    /// scrobble itself (if any) was already queued mid-playback by
+    /// `scrobbleEligible`, so this only reflects that outcome in the row.
     func trackFinished(_ track: Track, played: TimeInterval) {
+        let row = play?.id == track.id ? play?.row : nil
         // Ignore accidental blips / rapid skips.
-        guard played >= 4 else { return }
+        guard played >= 4 else {
+            if let row { Task { await database.deleteHistory(id: row) } }
+            if play?.id == track.id { play = nil; currentScrobbled = false; currentRow = nil }
+            return
+        }
 
         let duration = track.duration ?? 0
         // Backstop: if the mid-play eligibility emit was somehow missed but the
@@ -171,7 +210,7 @@ final class ScrobbleService {
         let scrobbled = play?.id == track.id && (play?.scrobbled ?? false)
         let startedAt = play?.id == track.id ? play!.startedAt
                                              : Int(Date().timeIntervalSince1970 - played)
-        if play?.id == track.id { play = nil; currentScrobbled = false }
+        if play?.id == track.id { play = nil; currentScrobbled = false; currentRow = nil }
 
         let artist = track.displayArtist
         let album = track.album
@@ -189,10 +228,14 @@ final class ScrobbleService {
             } else {
                 state = .ineligible
             }
-            await database.insertHistory(path: path, artist: artist, album: album, title: title,
-                                         playedAt: startedAt, state: state,
-                                         duration: duration > 0 ? Int(duration.rounded()) : nil,
-                                         listened: Int(played.rounded()))
+            if let row {
+                await database.updateHistory(id: row, listened: Int(played.rounded()), position: nil, state: state)
+            } else {
+                await database.insertHistory(path: path, artist: artist, album: album, title: title,
+                                             playedAt: startedAt, state: state,
+                                             duration: duration > 0 ? Int(duration.rounded()) : nil,
+                                             listened: Int(played.rounded()))
+            }
             // Row now exists — signal the History view to reload (back on the main
             // actor, since this Task inherits ScrobbleService's isolation).
             historyVersion += 1

@@ -32,6 +32,7 @@ struct HistoryEntry: Identifiable, Sendable {
     /// The file that was played, when it was a library track. Rows written before
     /// this column existed have none, and cannot be navigated back to.
     let path: String?
+    let position: Int?         // playhead at the last save, seconds; nil once finished
 }
 
 /// Fields a user can override via tag editing (stored in the DB, layered over
@@ -192,6 +193,7 @@ actor Database {
         // Track length + how many seconds were actually played (added later).
         addColumn("history", "duration", "INTEGER")
         addColumn("history", "listened", "INTEGER")
+        addColumn("history", "position", "INTEGER")
     }
 
     /// Add a column if the table doesn't already have it (poor-man's migration).
@@ -297,16 +299,18 @@ actor Database {
     /// date_added. Only stale rows are touched, so the FTS update trigger fires
     /// once per container change, not every launch.
     func normalizeContainerPaths(currentDocuments docs: String) {
-        let sql = """
-        UPDATE tracks
-        SET path = ?1 || substr(path, instr(path, '/Documents/') + 10)
-        WHERE instr(path, '/Documents/') > 0
-          AND substr(path, 1, instr(path, '/Documents/') + 9) <> ?1;
-        """
-        guard let stmt = prepare(sql) else { return }
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, docs)
-        sqlite3_step(stmt)
+        for table in ["tracks", "history"] {
+            let sql = """
+            UPDATE \(table)
+            SET path = ?1 || substr(path, instr(path, '/Documents/') + 10)
+            WHERE instr(path, '/Documents/') > 0
+              AND substr(path, 1, instr(path, '/Documents/') + 9) <> ?1;
+            """
+            guard let stmt = prepare(sql) else { continue }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, docs)
+            sqlite3_step(stmt)
+        }
     }
 
     func knownPathsWithMtime() -> [String: Double] {
@@ -772,10 +776,11 @@ actor Database {
 
     // MARK: - Play history
 
+    @discardableResult
     func insertHistory(path: String?, artist: String, album: String?, title: String,
                        playedAt: Int, state: HistoryEntry.ScrobbleState,
-                       duration: Int?, listened: Int?) {
-        guard let stmt = prepare("INSERT INTO history (path, artist, album, title, played_at, scrobble_state, duration, listened) VALUES (?,?,?,?,?,?,?,?)") else { return }
+                       duration: Int?, listened: Int?) -> Int64 {
+        guard let stmt = prepare("INSERT INTO history (path, artist, album, title, played_at, scrobble_state, duration, listened) VALUES (?,?,?,?,?,?,?,?)") else { return 0 }
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, path)
         bindText(stmt, 2, artist)
@@ -785,6 +790,26 @@ actor Database {
         bindText(stmt, 6, state.rawValue)
         bindInt(stmt, 7, duration)
         bindInt(stmt, 8, listened)
+        sqlite3_step(stmt)
+        return sqlite3_last_insert_rowid(db)
+    }
+
+    /// A play in progress is saved every few seconds, so a kill loses at most that
+    /// much; `state` is settled only when the track is done.
+    func updateHistory(id: Int64, listened: Int, position: Int?, state: HistoryEntry.ScrobbleState?) {
+        guard let stmt = prepare("UPDATE history SET listened=?, position=?, scrobble_state=COALESCE(?, scrobble_state) WHERE id=?") else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindInt(stmt, 1, listened)
+        bindInt(stmt, 2, position)
+        bindText(stmt, 3, state?.rawValue)
+        sqlite3_bind_int64(stmt, 4, id)
+        sqlite3_step(stmt)
+    }
+
+    func deleteHistory(id: Int64) {
+        guard let stmt = prepare("DELETE FROM history WHERE id=?") else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, id)
         sqlite3_step(stmt)
     }
 
@@ -805,7 +830,7 @@ actor Database {
     }
 
     func history(limit: Int = 1000) -> [HistoryEntry] {
-        let sql = "SELECT id, artist, album, title, played_at, scrobble_state, duration, listened, path FROM history ORDER BY played_at DESC, id DESC LIMIT ?;"
+        let sql = "SELECT id, artist, album, title, played_at, scrobble_state, duration, listened, path, position FROM history ORDER BY played_at DESC, id DESC LIMIT ?;"
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
@@ -820,7 +845,8 @@ actor Database {
                 scrobbleState: HistoryEntry.ScrobbleState(rawValue: columnText(stmt, 5) ?? "ineligible") ?? .ineligible,
                 duration: columnInt(stmt, 6),
                 listened: columnInt(stmt, 7),
-                path: columnText(stmt, 8)
+                path: columnText(stmt, 8),
+                position: columnInt(stmt, 9)
             ))
         }
         return rows

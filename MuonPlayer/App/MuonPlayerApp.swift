@@ -41,19 +41,11 @@ struct MuonPlayerApp: App {
                 .task {
                     // Let the playhead reach the library for artist-folder order.
                     player.library = library
-                    // Route playback events to the scrobbler.
-                    player.onTrackStarted = { [scrobbler] track in
-                        scrobbler.nowPlaying(track)
-                    }
-                    player.onTrackFinished = { [scrobbler] track, played in
-                        scrobbler.trackFinished(track, played: played)
-                    }
-                    player.onScrobbleEligible = { [scrobbler] track in
-                        scrobbler.scrobbleEligible(track)
-                    }
+                    connectScrobbler(scrobbler, to: player)
                     scrobbler.start()
                     DemoLibrary.seedIfNeeded()
                     await library.loadFromDatabase()
+                    await restoreLastPlayed(player, from: library)
                     await library.rescan()
 
                     if GaplessSelfTest.isEnabled {

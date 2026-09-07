@@ -153,6 +153,27 @@ struct LibraryTests {
         #expect(folders == ["Album [FLAC]", "Album [FLAC]", "Album [FLAC]",
                             "Album [MP3]", "Album [MP3]", "Album [MP3]"])
     }
+
+    @Test("A play is saved at start, refreshed as it goes, and settled at the end")
+    func historyFollowsThePlay() async {
+        let db = makeDB()
+        let id = await db.insertHistory(path: "/m/3.mp3", artist: "Queen", album: nil, title: "Innuendo",
+                                        playedAt: 1_000, state: .ineligible, duration: 390, listened: 0)
+        await db.updateHistory(id: id, listened: 5, position: 5, state: nil)
+        var row = await db.history(limit: 1).first
+        #expect(row?.listened == 5)
+        #expect(row?.position == 5)
+        #expect(row?.scrobbleState == .ineligible)
+
+        await db.updateHistory(id: id, listened: 200, position: nil, state: .pending)
+        row = await db.history(limit: 1).first
+        #expect(row?.listened == 200)
+        #expect(row?.position == nil)
+        #expect(row?.scrobbleState == .pending)
+
+        await db.deleteHistory(id: id)
+        #expect(await db.history(limit: 1).isEmpty)
+    }
 }
 
 /// "Repeat Artist" walks an artist's discography in release order, independent of
