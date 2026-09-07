@@ -19,8 +19,10 @@ struct MiniPlayerContent: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(player.currentTrack?.title ?? "")
                             .font(.subheadline.weight(.medium)).lineLimit(1)
+                            .foregroundStyle(Color(.label))
                         if let artist = player.currentTrack?.artist {
-                            Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(artist).font(.caption).lineLimit(1)
+                                .foregroundStyle(Color(.secondaryLabel))
                         }
                     }
                     Spacer(minLength: 4)
