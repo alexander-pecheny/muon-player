@@ -120,7 +120,7 @@ struct NowPlayingView: View {
             )
             .frame(height: 48)
             HStack {
-                Text(formatDuration(Double(elapsedSeconds)))
+                Text(formatDuration(Double(elapsedSeconds)) + " / " + formatDuration(player.duration))
                 Spacer()
                 Text("-" + formatDuration(Double(remainingSeconds)))
             }
