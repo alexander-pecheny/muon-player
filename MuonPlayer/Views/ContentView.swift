@@ -33,11 +33,17 @@ struct ContentView: View {
     }
 
     // The mini-player is gated on `currentTrack` so there's no empty glass
-    // accessory / inset before anything has played. Tab selection and pushed
-    // navigation live in the external `router` (@Observable), so the TabView
-    // rebuild when the accessory first appears re-reads them and nothing resets.
+    // accessory / inset before anything has played. The gate must not change
+    // the view tree: swapping the modifier in rebuilds the TabView, and every
+    // pushed page comes back with empty state and reloads in view — an album
+    // page flashed "Album Is Gone" whenever a track started. Only iOS 26.0,
+    // which lacks the flag, still pays that.
     @ViewBuilder private var content: some View {
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.1, *) {
+            tabs.tabViewBottomAccessory(isEnabled: player.currentTrack != nil) {
+                MiniAccessory(onTap: { showNowPlaying = true })
+            }
+        } else if #available(iOS 26.0, *) {
             if player.currentTrack != nil {
                 tabs.tabViewBottomAccessory {
                     MiniAccessory(onTap: { showNowPlaying = true })
