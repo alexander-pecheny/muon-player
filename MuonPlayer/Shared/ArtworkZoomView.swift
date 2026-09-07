@@ -20,17 +20,20 @@ struct ArtworkZoomView: View {
             ScrollView([.horizontal, .vertical]) {
                 content
                     .frame(width: geo.size.width * scale, height: geo.size.height * scale)
+                    .contentShape(Rectangle())
+                    // On the scroll content, not above the ScrollView: the UIKit
+                    // scroll view underneath would otherwise keep both fingers.
+                    .simultaneousGesture(
+                        MagnifyGesture()
+                            .onChanged { pinch = $0.magnification }
+                            .onEnded { _ in zoom = scale; pinch = 1 }
+                    )
+                    .onTapGesture(count: 2) { setZoom(zoom > 1 ? 1 : 3) }
             }
             .scrollDisabled(scale <= 1)
         }
         .background(.black)
         .ignoresSafeArea()
-        .gesture(
-            MagnifyGesture()
-                .onChanged { pinch = $0.magnification }
-                .onEnded { _ in zoom = scale; pinch = 1 }
-        )
-        .onTapGesture(count: 2) { setZoom(zoom > 1 ? 1 : 3) }
         .overlay(alignment: .bottom) { controls }
         .overlay(alignment: .topTrailing) { closeButton }
         .task { image = await ArtworkCache.shared.load(path: path, maxPixel: 3000, from: library) }

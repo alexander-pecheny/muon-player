@@ -27,6 +27,7 @@ struct MiniPlayerContent: View {
                     controls
                 }
                 .padding(.horizontal, 8)
+                .shadow(color: Color(.systemBackground).opacity(0.9), radius: 2)
             }
         }
         .frame(maxHeight: .infinity)
