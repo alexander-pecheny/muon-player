@@ -14,7 +14,7 @@ struct MiniWaveform<Label: View>: View {
     @ViewBuilder var label: () -> Label
 
     private static var ring: [CGSize] {
-        [(1.5, 0), (-1.5, 0), (0, 1.5), (0, -1.5), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        [(2.5, 0), (-2.5, 0), (0, 2.5), (0, -2.5), (1.8, 1.8), (1.8, -1.8), (-1.8, 1.8), (-1.8, -1.8)]
             .map { CGSize(width: $0.0, height: $0.1) }
     }
 
@@ -35,7 +35,7 @@ struct MiniWaveform<Label: View>: View {
             .overlay {
                 WaveformShape(samples: samples, minBarHeight: 2)
                     .fill(colorScheme == .dark ? Color.black : .white)
-                    .opacity(0.8)
+                    .opacity(0.55)
                     .mask { contour }
                 label()
             }
@@ -46,13 +46,13 @@ struct MiniWaveform<Label: View>: View {
             }
     }
 
-    /// The label grown by a point and a half in every direction, plus a soft edge.
+    /// The label grown by two and a half points in every direction, plus a soft edge.
     private var contour: some View {
         ZStack {
             ForEach(Array(Self.ring.enumerated()), id: \.offset) { _, offset in
                 label().offset(offset)
             }
-            label().blur(radius: 3)
+            label().blur(radius: 5)
         }
     }
 }
