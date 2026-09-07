@@ -64,6 +64,10 @@ final class TabRouter {
     init() {
         let saved = (UserDefaults.standard.array(forKey: Self.key) as? [Data] ?? [])
             .compactMap(Context.init(snapshot:))
+        let documents = LibraryRoot.documents.path
+        for context in saved {
+            context.paths = context.paths.mapValues { $0.map { $0.rehomed(documents: documents) } }
+        }
         restored = !saved.isEmpty
         let open = saved.isEmpty ? [Context(slot: .tab(.albums))] : saved
         contexts = open
@@ -151,5 +155,27 @@ final class TabRouter {
     func openFolder(_ url: URL) {
         active.push(.folder(FolderRef(url: url)))
         persist()
+    }
+}
+
+/// iOS moves the app's data container on every install. The library rewrites its
+/// paths at launch to follow it (`normalizeContainerPaths`); a restored route
+/// carries the old ones and has to follow too.
+private extension Route {
+    func rehomed(documents: String) -> Route {
+        func move(_ path: String) -> String {
+            guard let range = path.range(of: "/Documents/") else { return path }
+            return documents + "/" + path[range.upperBound...]
+        }
+        func move(_ album: Album) -> Album {
+            Album(title: album.title, artist: album.artist, trackCount: album.trackCount,
+                  year: album.year, artworkPath: album.artworkPath.map(move))
+        }
+        switch self {
+        case .album(let album): return .album(move(album))
+        case .albumRef(let ref): return .albumRef(AlbumRef(album: move(ref.album), focusPath: move(ref.focusPath)))
+        case .folder(let ref): return .folder(FolderRef(url: URL(fileURLWithPath: move(ref.url.path))))
+        case .artist, .section: return self
+        }
     }
 }
