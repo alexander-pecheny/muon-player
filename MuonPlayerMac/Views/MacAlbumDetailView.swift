@@ -139,7 +139,7 @@ struct MacAlbumDetailView: View {
 
     @ViewBuilder private func trackRows(_ group: [Track]) -> some View {
         ForEach(Array(rows(group).enumerated()), id: \.offset) { _, row in
-            HStack(alignment: .top, spacing: columnGap) {
+            HStack(spacing: columnGap) {
                 ForEach(row) { track in
                     MacTrackRow(track: track, context: group, showNumber: true, showFolder: false)
                         .frame(maxWidth: columnWidth, alignment: .leading)
