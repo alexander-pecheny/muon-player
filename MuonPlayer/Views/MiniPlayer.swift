@@ -13,24 +13,20 @@ struct MiniPlayerContent: View {
             artwork
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            ZStack {
-                MiniWaveform()
+            MiniWaveform {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(player.currentTrack?.title ?? "")
                             .font(.subheadline.weight(.medium)).lineLimit(1)
-                            .foregroundStyle(Color(.label))
                         if let artist = player.currentTrack?.artist {
-                            Text(artist).font(.caption).lineLimit(1)
-                                .foregroundStyle(Color(.label).opacity(0.85))
+                            Text(artist).font(.caption).lineLimit(1).opacity(0.85)
                         }
                     }
+                    .foregroundStyle(Color(.label))
                     Spacer(minLength: 4)
                     controls
                 }
                 .padding(.horizontal, 8)
-                .shadow(color: .black.opacity(0.9), radius: 1)
-                .shadow(color: .black.opacity(0.5), radius: 3)
             }
         }
         .frame(maxHeight: .infinity)
