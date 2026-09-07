@@ -119,8 +119,10 @@ struct MacPlayerBar: View {
     private func timeLabel(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 9.5).monospacedDigit())
-            .shadow(color: .black.opacity(0.9), radius: 1)
-            .shadow(color: .black.opacity(0.6), radius: 3)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(.black.opacity(0.55), in: Capsule())
             .allowsHitTesting(false)
     }
 
