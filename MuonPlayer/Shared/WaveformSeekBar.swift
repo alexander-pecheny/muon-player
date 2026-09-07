@@ -24,8 +24,13 @@ struct WaveformSeekBar: View {
     /// Color of the played portion. Defaults to the system accent; callers pass
     /// the artwork-derived accent so the bar matches the current track.
     var accent: Color = .accentColor
+    /// When set, a pointer resting on the bar shows a line and the time under it.
+    var duration: TimeInterval = 0
+    /// Stamp elapsed / total and the remainder on the bottom corners.
+    var showsTimes = false
 
     @State private var dragFraction: Double?
+    @State private var hoverX: CGFloat?
 
     var body: some View {
         GeometryReader { geo in
@@ -43,7 +48,68 @@ struct WaveformSeekBar: View {
                 .modifier(SeekGesture(enabled: interactive, width: geo.size.width,
                                       dragFraction: $dragFraction, onScrub: onScrub, onCommit: onCommit))
                 .animation(.linear(duration: 0.12), value: shown)
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let point): hoverX = point.x
+                    case .ended: hoverX = nil
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let hoverX, interactive, duration > 0 {
+                        Rectangle().fill(.white.opacity(0.7)).frame(width: 1).offset(x: hoverX)
+                    }
+                }
+                // A stamp darkens the bars under it, capsule-shaped, and nothing
+                // else: white on that measures 7:1 against a light accent, where a
+                // shadowed glyph managed 2:1, and off the waveform it stays bare.
+                .overlay {
+                    let stamps = stamps(width: geo.size.width, shown: shown)
+                    shape.fill(.black.opacity(0.55))
+                        .mask { stampLayer(stamps, asMask: true) }
+                    stampLayer(stamps, asMask: false)
+                }
         }
+    }
+
+    private struct Stamp: Identifiable {
+        let text: String
+        let alignment: Alignment
+        let x: CGFloat
+        var id: String { "\(alignment)" }
+    }
+
+    private func stamps(width: CGFloat, shown: Double) -> [Stamp] {
+        guard duration > 0 else { return [] }
+        var stamps: [Stamp] = []
+        if showsTimes {
+            let elapsed = shown * duration
+            stamps.append(Stamp(text: formatDuration(elapsed) + " / " + formatDuration(duration),
+                                alignment: .bottomLeading, x: 0))
+            stamps.append(Stamp(text: "-" + formatDuration(max(0, duration - elapsed)),
+                                alignment: .bottomTrailing, x: 0))
+        }
+        if let hoverX, interactive {
+            stamps.append(Stamp(text: formatDuration(Double(hoverX / width) * duration),
+                                alignment: .topLeading, x: min(max(0, hoverX - 22), width - 44)))
+        }
+        return stamps
+    }
+
+    private func stampLayer(_ stamps: [Stamp], asMask: Bool) -> some View {
+        ZStack {
+            ForEach(stamps) { stamp in
+                Text(stamp.text)
+                    .font(.system(size: 9.5).monospacedDigit())
+                    .foregroundStyle(asMask ? .clear : .white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(asMask ? Capsule().fill(.black) : nil)
+                    .fixedSize()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: stamp.alignment)
+                    .offset(x: stamp.x)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 

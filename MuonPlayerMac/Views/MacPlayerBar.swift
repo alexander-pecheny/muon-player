@@ -16,10 +16,6 @@ struct MacPlayerBar: View {
         return min(1, max(0, player.currentTime / player.duration))
     }
 
-    private var elapsed: TimeInterval {
-        scrubFraction.map { $0 * player.duration } ?? player.currentTime
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             Divider()
@@ -104,26 +100,12 @@ struct MacPlayerBar: View {
             },
             interactive: player.currentTrack != nil,
             minBarHeight: 2,
-            accent: player.accentColor
+            accent: player.accentColor,
+            duration: player.duration,
+            showsTimes: true
         )
         .frame(maxWidth: .infinity)
         .frame(height: 38)
-        .overlay(alignment: .bottomLeading) {
-            timeLabel(formatDuration(elapsed) + " / " + formatDuration(player.duration))
-        }
-        .overlay(alignment: .bottomTrailing) {
-            timeLabel("-" + formatDuration(max(0, player.duration - elapsed)))
-        }
-    }
-
-    private func timeLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 9.5).monospacedDigit())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(.black.opacity(0.55), in: Capsule())
-            .allowsHitTesting(false)
     }
 
     private var trailing: some View {
