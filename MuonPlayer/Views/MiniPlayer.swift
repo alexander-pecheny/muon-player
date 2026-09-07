@@ -22,14 +22,15 @@ struct MiniPlayerContent: View {
                             .foregroundStyle(Color(.label))
                         if let artist = player.currentTrack?.artist {
                             Text(artist).font(.caption).lineLimit(1)
-                                .foregroundStyle(Color(.secondaryLabel))
+                                .foregroundStyle(Color(.label).opacity(0.85))
                         }
                     }
                     Spacer(minLength: 4)
                     controls
                 }
                 .padding(.horizontal, 8)
-                .shadow(color: .black.opacity(0.6), radius: 2)
+                .shadow(color: .black.opacity(0.9), radius: 1)
+                .shadow(color: .black.opacity(0.5), radius: 3)
             }
         }
         .frame(maxHeight: .infinity)

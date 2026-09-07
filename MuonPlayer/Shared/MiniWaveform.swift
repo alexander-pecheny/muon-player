@@ -15,8 +15,13 @@ struct MiniWaveform: View {
         return min(1, max(0, player.currentTime / player.duration))
     }
 
+    private var samples: [Float] {
+        if !waveform.isEmpty { return waveform }
+        return player.currentTrack.flatMap { WaveformStore.shared.peek($0.url) } ?? []
+    }
+
     var body: some View {
-        WaveformSeekBar(samples: waveform, progress: progress, interactive: false,
+        WaveformSeekBar(samples: samples, progress: progress, interactive: false,
                         minBarHeight: 2, accent: player.accentColor)
             .frame(height: height)
             .allowsHitTesting(false)
