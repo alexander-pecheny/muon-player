@@ -102,7 +102,7 @@ struct MacRootView: View {
 
     private func sidebarRow(_ s: MacRouter.Section) -> some View {
         let selected = router.section == s
-        return Button { router.section = s } label: {
+        return Button { router.select(s) } label: {
             Label(s.title, systemImage: s.systemImage)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())

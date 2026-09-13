@@ -84,6 +84,14 @@ final class MacRouter {
     /// into an album lands on the results rather than staying hidden behind it.
     func popToRoot() { active.paths[active.slot] = [] }
 
+    /// Clicking the section already selected pops it back to its root, as a
+    /// browser's sidebar does: otherwise the row is dead while an album sits on
+    /// top of it.
+    func select(_ s: Section) {
+        if active.slot == s { popToRoot() } else { active.slot = s }
+        persist()
+    }
+
     // MARK: - Tabs
 
     func newTab(section: Section? = nil, activate: Bool = true) {
