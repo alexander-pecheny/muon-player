@@ -157,7 +157,7 @@ func readTracks() -> [SeamTrack] {
 /// Read a folder off the disk, with the app's own scanner and tag reader — so a folder
 /// the library has never seen is grouped into albums exactly as the library would.
 func readFolder(_ path: String) -> [SeamTrack] {
-    let files = FileScanner(roots: [URL(fileURLWithPath: path)]).findAudioFiles()
+    let files = FolderWalk.audioFiles(under: URL(fileURLWithPath: path))
     var out = [SeamTrack?](repeating: nil, count: files.count)
 
     out.withUnsafeMutableBufferPointer { buffer in

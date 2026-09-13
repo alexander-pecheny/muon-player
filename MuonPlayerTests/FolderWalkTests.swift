@@ -2,8 +2,8 @@ import Testing
 import Foundation
 @testable import MuonPlayer
 
-@Suite("FileScanner Tests")
-struct FileScannerTests {
+@Suite("Folder Walk Tests")
+struct FolderWalkTests {
 
     private func createTempDirectory() throws -> URL {
         let tempDir = FileManager.default.temporaryDirectory
@@ -13,16 +13,15 @@ struct FileScannerTests {
     }
 
     private func createFile(at directory: URL, name: String) throws {
-        let fileURL = directory.appendingPathComponent(name)
-        try Data("dummy".utf8).write(to: fileURL)
+        try Data("dummy".utf8).write(to: directory.appendingPathComponent(name))
     }
 
     private func cleanup(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
     }
 
-    @Test("Scanner returns only audio files from mixed directory")
-    func scanFindsOnlyAudioFiles() async throws {
+    @Test("The walk returns only audio files from a mixed directory")
+    func walkFindsOnlyAudioFiles() throws {
         let tempDir = try createTempDirectory()
         defer { cleanup(tempDir) }
 
@@ -32,16 +31,14 @@ struct FileScannerTests {
         try createFile(at: tempDir, name: "image.png")
         try createFile(at: tempDir, name: "beat.wav")
 
-        let scanner = FileScanner(rootURL: tempDir)
-        let tracks = await scanner.scan()
+        let files = FolderWalk.audioFiles(under: tempDir)
 
-        #expect(tracks.count == 3)
-        let extensions = Set(tracks.map { $0.url.pathExtension.lowercased() })
-        #expect(extensions == Set(["mp3", "m4a", "wav"]))
+        #expect(files.count == 3)
+        #expect(Set(files.map { $0.pathExtension.lowercased() }) == Set(["mp3", "m4a", "wav"]))
     }
 
-    @Test("Scanner recursively scans subdirectories")
-    func scanRecursive() async throws {
+    @Test("The walk descends into subdirectories")
+    func walkRecursive() throws {
         let tempDir = try createTempDirectory()
         defer { cleanup(tempDir) }
 
@@ -51,40 +48,32 @@ struct FileScannerTests {
         try createFile(at: tempDir, name: "root.mp3")
         try createFile(at: subDir, name: "nested.aac")
 
-        let scanner = FileScanner(rootURL: tempDir)
-        let tracks = await scanner.scan()
-
-        #expect(tracks.count == 2)
+        #expect(FolderWalk.audioFiles(under: tempDir).count == 2)
     }
 
-    @Test("Scanner returns empty array for empty directory")
-    func scanEmptyDirectory() async throws {
+    @Test("An empty directory yields nothing")
+    func walkEmptyDirectory() throws {
         let tempDir = try createTempDirectory()
         defer { cleanup(tempDir) }
 
-        let scanner = FileScanner(rootURL: tempDir)
-        let tracks = await scanner.scan()
-
-        #expect(tracks.isEmpty)
+        #expect(FolderWalk.audioFiles(under: tempDir).isEmpty)
     }
 
-    @Test("Scanner ignores hidden files")
-    func scanIgnoresHiddenFiles() async throws {
+    @Test("The walk ignores hidden files")
+    func walkIgnoresHiddenFiles() throws {
         let tempDir = try createTempDirectory()
         defer { cleanup(tempDir) }
 
         try createFile(at: tempDir, name: "visible.mp3")
         try createFile(at: tempDir, name: ".hidden.mp3")
 
-        let scanner = FileScanner(rootURL: tempDir)
-        let tracks = await scanner.scan()
-
-        #expect(tracks.count == 1)
-        #expect(tracks[0].url.lastPathComponent == "visible.mp3")
+        let files = FolderWalk.audioFiles(under: tempDir)
+        #expect(files.count == 1)
+        #expect(files[0].lastPathComponent == "visible.mp3")
     }
 
-    @Test("Scanner finds all supported extensions")
-    func scanAllExtensions() async throws {
+    @Test("The walk finds every supported extension")
+    func walkAllExtensions() throws {
         let tempDir = try createTempDirectory()
         defer { cleanup(tempDir) }
 
@@ -92,9 +81,6 @@ struct FileScannerTests {
             try createFile(at: tempDir, name: "test.\(ext)")
         }
 
-        let scanner = FileScanner(rootURL: tempDir)
-        let tracks = await scanner.scan()
-
-        #expect(tracks.count == AudioFormat.supportedExtensions.count)
+        #expect(FolderWalk.audioFiles(under: tempDir).count == AudioFormat.supportedExtensions.count)
     }
 }

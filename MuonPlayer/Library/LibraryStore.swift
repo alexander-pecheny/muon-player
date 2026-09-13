@@ -65,11 +65,15 @@ final class LibraryStore {
         self.init(roots: [LibraryRoot(rootURL)])
     }
 
-    /// Re-point the library at a new set of folders and reindex. Tracks under
-    /// folders that were removed are pruned by the rescan.
+    /// Re-point the library at a new set of folders and reindex. A folder the user
+    /// removed is no longer walked, so its tracks are pruned here rather than by
+    /// the rescan.
     func setRoots(_ newRoots: [LibraryRoot]) async {
+        let dropped = roots.filter { old in !newRoots.contains { $0.path == old.path } }
         roots = newRoots
+        for root in dropped { await database.pruneUnder(prefix: root.path) }
         await rescan()
+        if !dropped.isEmpty { await loadFromDatabase() }
     }
 
     /// The root `path` lives under, if any.
@@ -152,13 +156,19 @@ final class LibraryStore {
         // If the metadata-reading logic changed since this DB was populated,
         // re-read every file (repairs libraries scanned by the buggy tag reader).
         let forceReadAll = await database.scannerVersion() < kScannerVersion
-        let changed = await scan(folders: roots.map(\.url), pruneScope: nil, forceReadAll: forceReadAll)
+        let changed = await scan(folders: roots.map(\.url), forceReadAll: forceReadAll)
         if forceReadAll { await database.setScannerVersion(kScannerVersion) }
         return changed ? .changed : .unchanged
     }
 
     /// Seconds between passes of the settle loop. A test shortens it.
     var settleDelay: Duration = .seconds(5)
+
+    /// How settled a folder must be before its mtime is recorded. A test zeroes it.
+    var folderMinAge: TimeInterval = 2
+
+    /// What the last pass did, for tests and the log.
+    private(set) var lastScan: (foldersStatted: Int, foldersListed: Int, filesRead: Int)?
 
     /// True while `rescanUntilSettled` is looping, so `scan` holds the seam pass
     /// back rather than starting it once per pass.
@@ -198,58 +208,51 @@ final class LibraryStore {
     /// Re-read just these folders — what the album screen's Refresh button does
     /// after the files were changed by some other app. Every file is read rather
     /// than mtime-diffed, since an outside tag editor may preserve the mtime, and
-    /// only rows beneath `folders` are pruned.
+    /// only the folders walked are pruned.
     func refresh(folders: [URL]) async {
         guard !isScanning else { return }
-        await scan(folders: folders, pruneScope: folders, forceReadAll: true)
+        await scan(folders: folders, forceReadAll: true)
     }
 
     /// Returns whether the library changed — files read, or rows pruned.
     @discardableResult
-    private func scan(folders: [URL], pruneScope: [URL]?, forceReadAll: Bool) async -> Bool {
+    private func scan(folders: [URL], forceReadAll: Bool) async -> Bool {
         // A root on an unmounted drive — or one the sandbox will not open — walks
-        // as empty, and an unscoped prune would then delete every track on it: a
+        // as empty, which would read as every folder on it having vanished: a
         // library silently emptied by pulling a cable, and a full re-read of the
-        // drive when it comes back. Walk only what is readable, prune only that.
+        // drive when it comes back. Walk only what is readable.
         let fm = FileManager.default
-        let reachable = folders.filter { fm.isReadableFile(atPath: $0.path) }
-        guard !reachable.isEmpty else { return false }
-        let pruneScope = pruneScope ?? (reachable.count == folders.count ? nil : reachable)
-        let folders = reachable
+        let folders = folders.filter { fm.isReadableFile(atPath: $0.path) }
+        guard !folders.isEmpty else { return false }
 
         isScanning = true
         scanPhase = .findingFiles(found: 0)
         defer { isScanning = false; scanProgress = nil; scanPhase = .idle }
 
         let known = await database.knownPathsWithMtime()
-        let scanner = FileScanner(roots: folders)
+        let knownFolders = await database.knownFolders()
+        let minAge = folderMinAge
 
-        // Enumerate the folder and diff against the DB off the main actor — for a
-        // large library this is thousands of stat() calls we don't want blocking
-        // the UI. Returns every current path (for pruning) and just the subset
-        // whose metadata needs (re)reading.
-        let (existingPaths, toRead) = await Task.detached(priority: .utility) { [scanner] in
-            let files = scanner.findAudioFiles { found in
+        // Walk off the main actor: even skipping folders this is one stat apiece,
+        // and a folder that did change is a readdir we don't want blocking the UI.
+        let walk = await Task.detached(priority: .utility) {
+            FolderWalk.run(roots: folders, known: knownFolders,
+                           listEverything: forceReadAll, minAge: minAge) { found in
                 Task { @MainActor [weak self] in
                     guard let self, self.isScanning else { return }
                     self.scanPhase = .findingFiles(found: found)
                 }
             }
-            let existingPaths = Set(files.map(\.path))
-            var toRead: [(path: String, url: URL, mtime: Double)] = []
-            for url in files {
-                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
-                    .contentModificationDate?.timeIntervalSince1970) ?? 0 ?? 0
-                if !forceReadAll, let knownMtime = known[url.path], abs(knownMtime - mtime) < 1 {
-                    continue // unchanged
-                }
-                toRead.append((url.path, url, mtime))
-            }
-            // Only the files being read need an order, so that the tag-reading
-            // progress runs album by album.
-            toRead.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-            return (existingPaths, toRead)
         }.value
+
+        var toRead = walk.files.filter { file in
+            guard !forceReadAll, let knownMtime = known[file.path] else { return true }
+            return abs(knownMtime - file.mtime) >= 1
+        }
+        // Only the files being read need an order, so the tag progress runs album
+        // by album.
+        toRead.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        lastScan = (walk.foldersStatted, walk.listed.count, toRead.count)
 
         // Only surface the scanning UI when there's genuine work to do, so an
         // ordinary relaunch (nothing changed) doesn't flash a progress indicator.
@@ -257,8 +260,14 @@ final class LibraryStore {
             await readAndUpsert(toRead)
         }
 
-        let removed = await database.pruneMissing(existingPaths: existingPaths,
-                                                  underFolders: pruneScope?.map(LibraryRoot.canonicalPath(of:)))
+        var removed = 0
+        for (folder, present) in walk.listed {
+            removed += await database.pruneTracks(directlyIn: folder, keeping: present)
+        }
+        for folder in walk.gone {
+            removed += await database.pruneUnder(prefix: folder)
+        }
+        await database.upsertFolders(walk.folderMtimes)
 
         // Reloading means re-running the album grouping over the whole library and
         // rebuilding every view that holds a snapshot of it. A scan that found

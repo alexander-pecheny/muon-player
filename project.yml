@@ -144,7 +144,8 @@ targets:
       - path: MuonPlayer/Audio/FFmpeg.swift
       - path: MuonPlayer/Audio/FFmpegMetadata.swift
       - path: MuonPlayer/Audio/TextEncodingRepair.swift
-      - path: MuonPlayer/Scanner/FileScanner.swift
+      - path: MuonPlayer/Scanner/FolderWalk.swift
+      - path: MuonPlayer/Library/LibraryRoot.swift
       - path: MuonPlayer/Models/Track.swift
     dependencies:
       - framework: Vendor/FFmpeg/libavcodec.xcframework

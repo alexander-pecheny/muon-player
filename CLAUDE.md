@@ -240,10 +240,26 @@ next pass anyway once their mtimes settle. A pass that changed nothing skips
 `loadFromDatabase` entirely — the grouping query over 13k tracks and the view rebuild
 behind it are what a no-op scan must not cost.
 
-A root the sandbox cannot read is dropped before the walk and left out of the prune.
-Without that, an unmounted drive walks as empty and an unscoped prune deletes every
-track on it; `LibraryFolders` likewise keeps a bookmark that failed to resolve rather
-than forgetting the folder for good.
+A root the sandbox cannot read is dropped before the walk. Without that, an unmounted
+drive walks as empty and every track on it is read as deleted; `LibraryFolders`
+likewise keeps a bookmark that failed to resolve rather than forgetting the folder for
+good.
+
+The pass no longer walks every file. A `folders(path, mtime)` table remembers every
+folder the scan has listed (roots included), and `FolderWalk` stats each known folder
+and lists only the ones whose mtime moved — a folder's mtime changes whenever a direct
+child is created, deleted or renamed, atomic saves included, so one at its recorded
+mtime still holds exactly what it held last time. On the real 13.5k-track library that
+took an idle pass from ~500 ms to ~6 ms, and made it linear in folders rather than
+files. Pruning follows the same scope: only a folder that was listed may lose tracks
+(by name), and a folder that vanished or was renamed takes its whole subtree
+(`pruneUnder`). Dropping a root prunes it in `setRoots`, since it is no longer walked.
+
+What it cannot see is a file rewritten in place — the file's mtime moves, the folder's
+does not. Inside iOS Documents only our own `TagWriter` does that, and it reindexes
+itself; on the Mac the Rescan button and the album Refresh button still force a full
+listing and re-read. A folder written to in the last two seconds is left unrecorded
+(`LibraryStore.folderMinAge`), so a copy still in flight is listed again next pass.
 
 ## Library maintenance
 

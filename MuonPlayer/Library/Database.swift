@@ -196,6 +196,9 @@ actor Database {
         addColumn("history", "position", "INTEGER")
         // A track's peak envelope, 1000 bytes; decoding the file for it takes a second.
         exec("CREATE TABLE IF NOT EXISTS waveforms (path TEXT PRIMARY KEY, peaks BLOB NOT NULL);")
+        // Every folder the scan has listed, with the mtime it had when listed (see
+        // FolderWalk). Roots are rows too.
+        exec("CREATE TABLE IF NOT EXISTS folders (path TEXT PRIMARY KEY, mtime REAL NOT NULL);")
     }
 
     /// Add a column if the table doesn't already have it (poor-man's migration).
@@ -275,22 +278,80 @@ actor Database {
         return sqlite3_last_insert_rowid(db)
     }
 
-    /// Remove tracks whose paths are no longer present. `underFolders` (canonical,
-    /// no trailing slash) narrows the sweep to those subtrees — a scan of one album
-    /// folder saw only that folder's files, so it must not delete the rest of the
-    /// library for being absent from them.
-    /// Returns how many rows were deleted, which is how a scan tells whether the
-    /// library actually changed and the UI needs reloading.
+    // MARK: - Folder index
+
+    func knownFolders() -> [String: Double] {
+        var result: [String: Double] = [:]
+        guard let stmt = prepare("SELECT path, mtime FROM folders") else { return result }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            result[String(cString: sqlite3_column_text(stmt, 0))] = sqlite3_column_double(stmt, 1)
+        }
+        return result
+    }
+
+    func upsertFolders(_ items: [(path: String, mtime: Double)]) {
+        guard !items.isEmpty, let stmt = prepare("INSERT OR REPLACE INTO folders (path, mtime) VALUES (?,?)")
+        else { return }
+        defer { sqlite3_finalize(stmt) }
+        exec("BEGIN IMMEDIATE;")
+        for item in items {
+            sqlite3_reset(stmt)
+            bindText(stmt, 1, item.path)
+            sqlite3_bind_double(stmt, 2, item.mtime)
+            sqlite3_step(stmt)
+        }
+        exec("COMMIT;")
+    }
+
+    /// Drop tracks sitting directly in `folder` whose file names the scan no longer
+    /// saw there. Returns how many rows went, which is how a scan tells whether the
+    /// library changed and the UI needs reloading.
     @discardableResult
-    func pruneMissing(existingPaths: Set<String>, underFolders: [String]? = nil) -> Int {
-        let all = allTrackPaths()
+    func pruneTracks(directlyIn folder: String, keeping present: Set<String>) -> Int {
+        let prefix = escapeLike(folder + "/")
+        guard let stmt = prepare("""
+        SELECT path FROM tracks WHERE path LIKE ? ESCAPE '\\' AND path NOT LIKE ? ESCAPE '\\'
+        """) else { return 0 }
+        bindText(stmt, 1, prefix + "%")
+        bindText(stmt, 2, prefix + "%/%")
+        var doomed: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let path = String(cString: sqlite3_column_text(stmt, 0))
+            if !present.contains((path as NSString).lastPathComponent) { doomed.append(path) }
+        }
+        sqlite3_finalize(stmt)
+        return deleteTracks(doomed)
+    }
+
+    /// Drop everything at or beneath `prefix` — what a folder that was deleted or
+    /// renamed leaves behind. Returns how many tracks went.
+    @discardableResult
+    func pruneUnder(prefix: String) -> Int {
+        let like = escapeLike(prefix + "/") + "%"
         var removed = 0
-        for path in all where !existingPaths.contains(path) {
-            if let underFolders, !underFolders.contains(where: { path.hasPrefix($0 + "/") }) { continue }
-            guard let stmt = prepare("DELETE FROM tracks WHERE path = ?") else { continue }
+        if let stmt = prepare("DELETE FROM tracks WHERE path LIKE ? ESCAPE '\\'") {
+            bindText(stmt, 1, like)
+            if sqlite3_step(stmt) == SQLITE_DONE { removed = Int(sqlite3_changes(db)) }
+            sqlite3_finalize(stmt)
+        }
+        if let stmt = prepare("DELETE FROM folders WHERE path = ? OR path LIKE ? ESCAPE '\\'") {
+            bindText(stmt, 1, prefix)
+            bindText(stmt, 2, like)
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+        }
+        return removed
+    }
+
+    private func deleteTracks(_ paths: [String]) -> Int {
+        guard !paths.isEmpty, let stmt = prepare("DELETE FROM tracks WHERE path = ?") else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        var removed = 0
+        for path in paths {
+            sqlite3_reset(stmt)
             bindText(stmt, 1, path)
             if sqlite3_step(stmt) == SQLITE_DONE { removed += Int(sqlite3_changes(db)) }
-            sqlite3_finalize(stmt)
         }
         return removed
     }
@@ -302,7 +363,7 @@ actor Database {
     /// date_added. Only stale rows are touched, so the FTS update trigger fires
     /// once per container change, not every launch.
     func normalizeContainerPaths(currentDocuments docs: String) {
-        for table in ["tracks", "history", "waveforms"] {
+        for table in ["tracks", "history", "waveforms", "folders"] {
             let sql = """
             UPDATE \(table)
             SET path = ?1 || substr(path, instr(path, '/Documents/') + 10)
@@ -313,6 +374,13 @@ actor Database {
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, docs)
             sqlite3_step(stmt)
+        }
+        // The Documents folder is itself a row in `folders`, and holds no
+        // '/Documents/' for the rewrite above to hinge on.
+        if let stmt = prepare("DELETE FROM folders WHERE path <> ?1 AND path LIKE '%/Documents'") {
+            bindText(stmt, 1, docs)
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
         }
     }
 
@@ -424,16 +492,6 @@ actor Database {
         sqlite3_bind_double(stmt, 2, mtime)
         bindText(stmt, 3, path)
         sqlite3_step(stmt)
-    }
-
-    private func allTrackPaths() -> [String] {
-        var paths: [String] = []
-        guard let stmt = prepare("SELECT path FROM tracks") else { return paths }
-        defer { sqlite3_finalize(stmt) }
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            paths.append(String(cString: sqlite3_column_text(stmt, 0)))
-        }
-        return paths
     }
 
     func trackCount() -> Int {
