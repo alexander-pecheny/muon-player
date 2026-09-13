@@ -233,6 +233,13 @@ At launch, on any Rescan button, and **whenever the app comes to the front** —
 added while the app is behind something else, so returning to it is the moment to
 look.
 
+On macOS an FSEvents stream over the roots (`MuonPlayerMac/FolderWatcher.swift`) also
+pokes the scan about a second after anything under them changes, so music copied in
+shows up without switching to the app. It is a poke, not a source of truth: the event
+is thrown away and the ordinary pass decides what moved, which is why dropped events
+and `MustScanSubDirs` need no handling. Activation keeps its own rescan for network
+volumes, where FSEvents cannot see a remote writer.
+
 An activation pass that found changes schedules another five seconds later and keeps
 going until one finds nothing (`LibraryStore.rescanUntilSettled`): a Finder copy still
 in flight would otherwise leave half an album indexed, and its files re-read on the

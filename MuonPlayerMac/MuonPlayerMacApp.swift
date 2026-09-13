@@ -8,6 +8,7 @@ struct MuonPlayerMacApp: App {
     @State private var player = Player()
     @State private var scrobbler: ScrobbleService
     @State private var router = MacRouter()
+    @State private var watcher = FolderWatcher()
 
     init() {
         // The app has its own tabs; AppKit's window tabbing would put a second,
@@ -36,6 +37,13 @@ struct MuonPlayerMacApp: App {
                 .onReceive(NotificationCenter.default.publisher(
                     for: NSApplication.didBecomeActiveNotification)) { _ in
                     library.rescanOnActivation()
+                }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: .libraryFoldersChangedOnDisk)) { _ in
+                    library.rescanOnActivation()
+                }
+                .onChange(of: library.roots, initial: true) {
+                    watcher.watch(library.roots.map(\.path))
                 }
                 .task {
                     player.library = library
