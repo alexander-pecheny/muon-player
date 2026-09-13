@@ -245,6 +245,9 @@ final class LibraryStore {
                 }
                 toRead.append((url.path, url, mtime))
             }
+            // Only the files being read need an order, so that the tag-reading
+            // progress runs album by album.
+            toRead.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
             return (existingPaths, toRead)
         }.value
 

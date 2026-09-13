@@ -17,9 +17,9 @@ final class FileScanner: Sendable {
 
     var rootURL: URL { roots[0] }
 
-    /// Audio file URLs found under the roots, deduplicated and sorted by path.
-    /// Nested roots (a folder and its parent both added) would otherwise yield
-    /// the same file twice and make the scan do double work.
+    /// Audio file URLs found under the roots, deduplicated. Nested roots (a folder
+    /// and its parent both added) would otherwise yield the same file twice and
+    /// make the scan do double work.
     ///
     /// `onProgress` is called with the running count as directories are walked —
     /// on a large library this pass takes long enough that the UI needs to say
@@ -45,7 +45,7 @@ final class FileScanner: Sendable {
         }
 
         onProgress?(files.count)
-        return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        return files
     }
 
     /// Convenience used by tests: audio files as bare Tracks (no metadata).
