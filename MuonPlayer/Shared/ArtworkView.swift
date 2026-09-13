@@ -12,6 +12,7 @@ final class ArtworkCache {
 
     private let cache = NSCache<NSString, PlatformImage>()
     private var misses = Set<String>()
+    private var sizes = Set<Int>()
     private var inFlight: [String: Task<PlatformImage?, Never>] = [:]
 
     init() {
@@ -24,6 +25,13 @@ final class ArtworkCache {
 
     func image(for path: String, maxPixel: Int = 400) -> PlatformImage? {
         cache.object(forKey: key(path, maxPixel) as NSString)
+    }
+
+    /// The largest copy of this cover already decoded, at whatever size. What a
+    /// full-size viewer can show at once instead of a spinner, since the thumbnail
+    /// the user just clicked is by definition in here.
+    func anyCached(path: String) -> PlatformImage? {
+        sizes.sorted(by: >).lazy.compactMap { self.image(for: path, maxPixel: $0) }.first
     }
     func isKnownMiss(_ path: String, maxPixel: Int = 400) -> Bool { misses.contains(key(path, maxPixel)) }
 
@@ -39,7 +47,12 @@ final class ArtworkCache {
         let image = await task.value
         inFlight[key] = nil
 
-        if let image { cache.setObject(image, forKey: key as NSString) } else { misses.insert(key) }
+        if let image {
+            cache.setObject(image, forKey: key as NSString)
+            sizes.insert(maxPixel)
+        } else {
+            misses.insert(key)
+        }
         return image
     }
 }

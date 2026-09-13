@@ -7,6 +7,7 @@ struct ArtworkZoomView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.dismiss) private var dismiss
     @State private var image: PlatformImage?
+    @State private var loaded = false
     @State private var zoom: CGFloat = 1
 
     private let maxZoom: CGFloat = 8
@@ -16,15 +17,32 @@ struct ArtworkZoomView: View {
             if let image {
                 zoomable(image)
             } else {
-                ProgressView().controlSize(.large)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                missing.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(.black)
         .ignoresSafeArea()
         .overlay(alignment: .bottom) { controls }
         .overlay(alignment: .topTrailing) { closeButton }
-        .task { image = await ArtworkCache.shared.load(path: path, maxPixel: 3000, from: library) }
+        .task {
+            // The thumbnail the user just clicked is already decoded, so show that
+            // while the full-size copy is read; a local cover has no business
+            // opening on a spinner.
+            image = ArtworkCache.shared.anyCached(path: path)
+            image = await ArtworkCache.shared.load(path: path, maxPixel: 3000, from: library) ?? image
+            loaded = true
+        }
+    }
+
+    /// A cover that failed to decode, once the load is done. Before that, a spinner.
+    @ViewBuilder private var missing: some View {
+        if loaded {
+            Image(systemName: "music.note")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+        } else {
+            ProgressView().controlSize(.large)
+        }
     }
 
     private var scale: CGFloat { min(max(zoom, 1), maxZoom) }
