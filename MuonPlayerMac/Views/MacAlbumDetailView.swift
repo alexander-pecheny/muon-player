@@ -36,20 +36,10 @@ struct MacAlbumDetailView: View {
     }
 
     /// The same release often sits on disk twice (a FLAC rip and an MP3 rip) and
-    /// both fold into one album. Give each folder its own section rather than
-    /// letting the rips interleave. `tracks` already arrives folder-ordered, so a
-    /// single pass preserves that order without sorting again.
+    /// both fold into one album. Give each rip its own section rather than letting
+    /// them interleave.
     private var folderGroups: [(folder: String, tracks: [Track])] {
-        var groups: [(String, [Track])] = []
-        for track in tracks {
-            let folder = library.relativeFolder(for: track)
-            if groups.last?.0 == folder {
-                groups[groups.count - 1].1.append(track)
-            } else {
-                groups.append((folder, [track]))
-            }
-        }
-        return groups.map { (folder: $0.0, tracks: $0.1) }
+        LibraryStore.ripGroups(tracks) { library.relativeFolder(for: $0) }
     }
 
     var body: some View {

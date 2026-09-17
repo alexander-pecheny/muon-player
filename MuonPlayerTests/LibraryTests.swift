@@ -250,4 +250,82 @@ struct AlbumArtistOrderTests {
         ]
         #expect(LibraryStore.orderByAlbum(tracks).map(\.title) == ["late", "untagged"])
     }
+
+    private func rip(_ folder: String, _ file: String, no: Int, duration: TimeInterval) -> Track {
+        Track(url: URL(fileURLWithPath: "/m/Lumen/\(folder)/\(file)"),
+              title: "\(folder)-\(no)", artist: "Lumen", album: "Правда?", albumArtist: "Lumen",
+              trackNo: no, year: 2005, duration: duration)
+    }
+
+    @Test("Two rips of one album play as blocks, not alternating copies")
+    func ripsStayInTheirOwnFolder() {
+        // The lengths differ by more than the old duplicate collapse tolerated, so
+        // this is the case that used to follow track 5 of the FLAC rip with track 5
+        // of the OPUS one.
+        let tracks = [
+            rip("Правда? OPUS", "05.opus", no: 5, duration: 370.3),
+            rip("Правда? FLAC", "05.flac", no: 5, duration: 375.9),
+            rip("Правда? FLAC", "06.flac", no: 6, duration: 200.1),
+            rip("Правда? OPUS", "06.opus", no: 6, duration: 194.4),
+        ]
+        #expect(LibraryStore.orderByAlbum(tracks).map(\.title) == [
+            "Правда? FLAC-5", "Правда? FLAC-6", "Правда? OPUS-5", "Правда? OPUS-6",
+        ])
+    }
+
+    @Test("One album spread over one folder still orders by track")
+    func singleFolderIsUnaffectedByTheFolderTier() {
+        let tracks = [
+            rip("Правда?", "02.flac", no: 2, duration: 100),
+            rip("Правда?", "01.flac", no: 1, duration: 100),
+        ]
+        #expect(LibraryStore.orderByAlbum(tracks).map(\.trackNo) == [1, 2])
+    }
+
+    @Test("A folder per disc plays in disc order, whatever the folders are called")
+    func discFoldersOutrankTheirNames() {
+        let tracks = [
+            Track(url: URL(fileURLWithPath: "/m/L/Studio/01.flac"), title: "d1t1",
+                  album: "B", albumArtist: "L", trackNo: 1, discNo: 1, year: 2005),
+            Track(url: URL(fileURLWithPath: "/m/L/Live Sessions/01.flac"), title: "d2t1",
+                  album: "B", albumArtist: "L", trackNo: 1, discNo: 2, year: 2005),
+        ]
+        #expect(LibraryStore.orderByAlbum(tracks).map(\.title) == ["d1t1", "d2t1"])
+    }
+}
+
+@Suite("Rip grouping")
+struct RipGroupTests {
+
+    private func track(_ folder: String, no: Int, disc: Int?) -> Track {
+        Track(url: URL(fileURLWithPath: "/m/A/\(folder)/\(no).flac"),
+              album: "X", albumArtist: "A", trackNo: no, discNo: disc)
+    }
+
+    private func groups(_ tracks: [Track]) -> [(folder: String, tracks: [Track])] {
+        LibraryStore.ripGroups(tracks) { $0.url.deletingLastPathComponent().lastPathComponent }
+    }
+
+    @Test("Two rips of one album are two groups")
+    func ripsSplit() {
+        let tracks = [track("FLAC", no: 1, disc: nil), track("FLAC", no: 2, disc: nil),
+                      track("MP3", no: 1, disc: nil), track("MP3", no: 2, disc: nil)]
+        #expect(groups(tracks).map(\.folder) == ["FLAC", "MP3"])
+    }
+
+    @Test("A folder per disc is one album, not one rip per disc")
+    func discFoldersStayWhole() {
+        let tracks = [track("CD1", no: 1, disc: 1), track("CD1", no: 2, disc: 1),
+                      track("CD2", no: 1, disc: 2), track("CD2", no: 2, disc: 2)]
+        let result = groups(tracks)
+        #expect(result.count == 1)
+        #expect(result.first?.tracks.count == 4)
+    }
+
+    @Test("Both rips of a two-disc album still split by folder")
+    func discsWithinRipsSplit() {
+        let tracks = [track("FLAC", no: 1, disc: 1), track("FLAC", no: 1, disc: 2),
+                      track("MP3", no: 1, disc: 1), track("MP3", no: 1, disc: 2)]
+        #expect(groups(tracks).count == 2)
+    }
 }

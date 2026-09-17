@@ -51,14 +51,20 @@ struct AlbumDetailView: View {
                         .buttonStyle(.plain)
                         Text(trackCountLine)
                             .font(.caption).foregroundStyle(.tertiary)
-                        if let fmt = formatSummary {
+                        // With several rips each section states its own format, and
+                        // the album-wide one would only ever say "Mixed".
+                        if folderGroups.count <= 1, let fmt = Self.formatSummary(tracks) {
                             Text(fmt).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                         }
                     }
 
+                    // When the album exists as several rips, "Play" means the first
+                    // one — not all of them end to end.
+                    let primary = folderGroups.first?.tracks ?? tracks
+
                     HStack(spacing: 12) {
                         Button {
-                            if let first = tracks.first { player.play(track: first, context: tracks) }
+                            if let first = primary.first { player.play(track: first, context: primary) }
                         } label: {
                             Label("Play", systemImage: "play.fill")
                                 .labelStyle(.titleAndIcon)
@@ -67,7 +73,7 @@ struct AlbumDetailView: View {
                         .buttonStyle(.borderedProminent)
 
                         Button {
-                            for t in tracks { player.enqueue(t, context: tracks) }
+                            for t in primary { player.enqueue(t, context: primary) }
                         } label: {
                             Label("Enqueue", systemImage: "text.append")
                                 .labelStyle(.titleAndIcon)
@@ -84,23 +90,12 @@ struct AlbumDetailView: View {
                 .listRowSeparator(.hidden)
             }
 
-            Section {
-                ForEach(tracks) { track in
-                    TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url,
-                             hideArtist: artistMatchesAlbum(track), accent: albumAccent)
-                        .id(track.url.path)
-                        .contentShape(Rectangle())
-                        .onTapGesture { player.play(track: track, context: tracks) }
-                        .swipeActions(edge: .trailing) {
-                            Button {
-                                player.enqueue(track, context: tracks)
-                            } label: { Label("Enqueue", systemImage: "text.append") }
-                            .tint(albumAccent)
-                        }
-                        .contextMenu { trackMenu(track) }
-                        // No dangling rule above the first or below the last track.
-                        .listRowSeparator(track.url == tracks.first?.url ? .hidden : .automatic, edges: .top)
-                        .listRowSeparator(track.url == tracks.last?.url ? .hidden : .automatic, edges: .bottom)
+            // With one folder the heading is noise; with several it's the point.
+            if folderGroups.count <= 1 {
+                Section { trackRows(tracks) }
+            } else {
+                ForEach(folderGroups, id: \.folder) { group in
+                    Section { trackRows(group.tracks) } header: { folderHeader(group) }
                 }
             }
         }
@@ -167,13 +162,67 @@ struct AlbumDetailView: View {
         withAnimation { proxy.scrollTo(focusPath, anchor: .center) }
     }
 
+    /// The same release often sits on disk twice (a FLAC rip and an MP3 rip) and
+    /// both fold into one album. Give each rip its own section rather than letting
+    /// them interleave.
+    private var folderGroups: [(folder: String, tracks: [Track])] {
+        LibraryStore.ripGroups(tracks) { library.relativeFolder(for: $0) }
+    }
+
+    /// Rows for one folder. Context is the folder, not the album: playing a track
+    /// from the FLAC rip should continue through the FLAC rip.
+    @ViewBuilder private func trackRows(_ group: [Track]) -> some View {
+        ForEach(group) { track in
+            TrackRow(track: track, isCurrent: player.currentTrack?.url == track.url,
+                     hideArtist: artistMatchesAlbum(track), accent: albumAccent)
+                .id(track.url.path)
+                .contentShape(Rectangle())
+                .onTapGesture { player.play(track: track, context: group) }
+                .swipeActions(edge: .trailing) {
+                    Button {
+                        player.enqueue(track, context: group)
+                    } label: { Label("Enqueue", systemImage: "text.append") }
+                    .tint(albumAccent)
+                }
+                .contextMenu { trackMenu(track, context: group) }
+                // No dangling rule above the first or below the last track.
+                .listRowSeparator(track.url == group.first?.url ? .hidden : .automatic, edges: .top)
+                .listRowSeparator(track.url == group.last?.url ? .hidden : .automatic, edges: .bottom)
+        }
+    }
+
+    private func folderHeader(_ group: (folder: String, tracks: [Track])) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                // The leaf folder is what tells two rips apart, so keep its end
+                // visible and drop the path in front of it.
+                Text(group.folder).lineLimit(1).truncationMode(.head)
+                Text(Self.summaryLine(group.tracks)).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                guard let first = group.tracks.first else { return }
+                player.play(track: first, context: group.tracks)
+            } label: {
+                Image(systemName: "play.fill").font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .tint(albumAccent)
+        }
+        .font(.caption)
+        .textCase(nil)
+    }
+
     // MARK: Menus
 
     @ViewBuilder private var albumMenu: some View {
         Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
-        Button { for t in tracks { player.enqueue(t, context: tracks) } } label: {
+        // The rip the header's buttons act on, so the menu never quietly queues
+        // the album twice over.
+        let primary = folderGroups.first?.tracks ?? tracks
+        Button { for t in primary { player.enqueue(t, context: primary) } } label: {
             Label("Add Album to Queue", systemImage: "text.append")
         }
         Button { editingAlbum = true } label: {
@@ -192,11 +241,11 @@ struct AlbumDetailView: View {
         }
     }
 
-    @ViewBuilder private func trackMenu(_ track: Track) -> some View {
+    @ViewBuilder private func trackMenu(_ track: Track, context: [Track]) -> some View {
         Button { navPath?.wrappedValue.append(.artist(ArtistRef(name: album.artist))) } label: {
             Label("Go to Artist", systemImage: "music.mic")
         }
-        Button { player.enqueue(track, context: tracks) } label: {
+        Button { player.enqueue(track, context: context) } label: {
             Label("Add Track to Queue", systemImage: "text.append")
         }
         Button { editingTrack = track } label: {
@@ -213,17 +262,20 @@ struct AlbumDetailView: View {
         return a.caseInsensitiveCompare(album.artist) == .orderedSame
     }
 
+    /// "2005 · 12 tracks · 43:12". The count and the running time both come from
+    /// the rows on screen, so an album held twice reads as the two rips it is.
     private var trackCountLine: String {
         var parts: [String] = []
         if let year = album.year { parts.append(String(year)) }
-        parts.append("\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")")
+        let count = tracks.isEmpty ? album.trackCount : tracks.count
+        parts.append("\(count) track\(count == 1 ? "" : "s")")
         let total = tracks.compactMap(\.duration).reduce(0, +)
         if total > 0 { parts.append(formatDuration(total)) }
         return parts.joined(separator: " · ")
     }
 
-    /// Item #5: format + bitrate summary for the album.
-    private var formatSummary: String? {
+    /// Item #5: format + bitrate summary for a set of tracks.
+    private static func formatSummary(_ tracks: [Track]) -> String? {
         guard !tracks.isEmpty else { return nil }
         let fmts = Set(tracks.map { $0.formatLabel })
         let fmt = fmts.count == 1 ? (fmts.first ?? "") : "Mixed"
@@ -231,6 +283,13 @@ struct AlbumDetailView: View {
         guard let lo = brs.min(), let hi = brs.max() else { return fmt }
         let br = lo == hi ? "\(lo) kbps" : "\(lo)–\(hi) kbps"
         return "\(fmt) · \(br)"
+    }
+
+    /// A folder section's format, bitrate and running time.
+    private static func summaryLine(_ tracks: [Track]) -> String {
+        let total = tracks.compactMap(\.duration).reduce(0, +)
+        return [formatSummary(tracks), total > 0 ? formatDuration(total) : nil]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 }
 
