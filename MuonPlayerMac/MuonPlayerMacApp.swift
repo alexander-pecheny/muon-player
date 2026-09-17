@@ -9,6 +9,7 @@ struct MuonPlayerMacApp: App {
     @State private var scrobbler: ScrobbleService
     @State private var router = MacRouter()
     @State private var watcher = FolderWatcher()
+    @State private var sendToPhone = SendToPhone()
 
     init() {
         // The app has its own tabs; AppKit's window tabbing would put a second,
@@ -33,6 +34,7 @@ struct MuonPlayerMacApp: App {
                 .environment(scrobbler)
                 .environment(folders)
                 .environment(router)
+                .environment(sendToPhone)
                 .frame(minWidth: 900, minHeight: 560)
                 .onReceive(NotificationCenter.default.publisher(
                     for: NSApplication.didBecomeActiveNotification)) { _ in

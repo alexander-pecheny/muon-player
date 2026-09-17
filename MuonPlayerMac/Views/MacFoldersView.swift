@@ -9,6 +9,7 @@ struct MacFoldersView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @Environment(MacRouter.self) private var router
+    @Environment(SendToPhone.self) private var sendToPhone
     @State private var subfolders: [URL] = []
     @State private var trackFiles: [Track] = []
     @State private var loaded = false
@@ -28,6 +29,13 @@ struct MacFoldersView: View {
                         .contextMenu {
                             Button("Open in New Tab") { router.openFolder(folder, inNewTab: true) }
                             RevealInFinderButton(url: folder)
+                            Divider()
+                            Button("Send to iPhone") { sendToPhone.send([folder], roots: library.roots) }
+                                .disabled(sendToPhone.isBusy)
+                            Button("Send to iPhone (Opus)") {
+                                sendToPhone.send([folder], roots: library.roots, opus: true)
+                            }
+                            .disabled(sendToPhone.isBusy)
                         }
                     }
                 }

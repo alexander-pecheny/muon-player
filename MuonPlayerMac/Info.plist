@@ -24,7 +24,13 @@
 	<string>public.app-category.music</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_muon._tcp</string>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MuonPlayer looks on your local network for a phone to send music to.</string>
 </dict>
 </plist>

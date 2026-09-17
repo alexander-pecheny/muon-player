@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(ScrobbleService.self) private var scrobbler
     @Environment(LibraryStore.self) private var library
+    @Environment(TransferReceiver.self) private var receiver
 
     @State private var username = ""
     @State private var password = ""
@@ -65,7 +66,25 @@ struct SettingsView: View {
             } header: {
                 Text("Library")
             } footer: {
-                Text("Add music via the Files app under **On My iPhone → MuonPlayer**.")
+                Text("""
+                Send music from the Mac app while this app is open, or add it through the \
+                Files app under **On My iPhone → MuonPlayer**.
+                """)
+            }
+
+            if !receiver.trustedSenders.isEmpty {
+                Section {
+                    ForEach(receiver.trustedSenders, id: \.id) { sender in
+                        Text(sender.name)
+                            .swipeActions {
+                                Button("Forget", role: .destructive) { receiver.forget(sender) }
+                            }
+                    }
+                } header: {
+                    Text("Sending Macs")
+                } footer: {
+                    Text("These machines may add music over the local network. Swipe to forget one.")
+                }
             }
 
             Section {
