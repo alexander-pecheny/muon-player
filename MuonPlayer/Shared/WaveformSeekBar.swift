@@ -57,6 +57,7 @@ struct WaveformSeekBar: View {
                 .overlay(alignment: .topLeading) {
                     if let hoverX, interactive, duration > 0 {
                         Rectangle().fill(.white.opacity(0.7)).frame(width: 1).offset(x: hoverX)
+                            .allowsHitTesting(false)
                     }
                 }
                 // A stamp darkens the bars under it, capsule-shaped, and nothing
@@ -64,9 +65,14 @@ struct WaveformSeekBar: View {
                 // shadowed glyph managed 2:1, and off the waveform it stays bare.
                 .overlay {
                     let stamps = stamps(width: geo.size.width, shown: shown)
-                    shape.fill(.black.opacity(0.55))
-                        .mask { stampLayer(stamps, asMask: true) }
-                    stampLayer(stamps, asMask: false)
+                    // The pointer has to reach the gesture underneath: a filled
+                    // shape on top swallows both the click and the hover it covers.
+                    ZStack {
+                        shape.fill(.black.opacity(0.55))
+                            .mask { stampLayer(stamps, asMask: true) }
+                        stampLayer(stamps, asMask: false)
+                    }
+                    .allowsHitTesting(false)
                 }
         }
     }
