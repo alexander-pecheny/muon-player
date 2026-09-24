@@ -25,7 +25,8 @@ enum FolderWalk {
 
     /// `minAge` holds back the mtime of a folder written to that recently, so the
     /// next settle pass lists it again: a copy still in flight is not a state worth
-    /// remembering.
+    /// remembering. It is still recorded, at mtime 0, or its parent would be skipped
+    /// as unchanged and nothing would ever walk down into it again.
     static func run(roots: [URL], known: [String: Double], listEverything: Bool,
                     minAge: TimeInterval, onProgress: (@Sendable (Int) -> Void)? = nil) -> Result {
         let fm = FileManager.default
@@ -80,7 +81,7 @@ enum FolderWalk {
                 result.listed[path] = names
                 stack.append(contentsOf: subfolders)
                 result.gone.append(contentsOf: (children[path] ?? []).filter { !subfolders.contains($0) })
-                if now - mtime >= minAge { result.folderMtimes.append((path, mtime)) }
+                result.folderMtimes.append((path, now - mtime >= minAge ? mtime : 0))
             }
         }
 

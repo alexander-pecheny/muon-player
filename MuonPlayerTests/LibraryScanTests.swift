@@ -262,6 +262,26 @@ struct LibraryScanTests {
         #expect(await store.database.knownFolders().count == 1)
     }
 
+    @Test("A folder too young to record is still listed on the next pass")
+    func youngFolderIsListedAgain() async throws {
+        let dir = try makeFolder()
+        let album = dir.appendingPathComponent("Artist/Album")
+        try FileManager.default.createDirectory(at: album, withIntermediateDirectories: true)
+        let (store, cleanup) = makeStore(roots: [dir])
+        defer { cleanup(); try? FileManager.default.removeItem(at: dir) }
+        store.folderMinAge = 60
+        try addTrack("01.mp3", to: album)
+        let old = Date(timeIntervalSinceNow: -3600)
+        for folder in [dir, dir.appendingPathComponent("Artist")] {
+            try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: folder.path)
+        }
+        await store.rescan()
+
+        try addTrack("02.mp3", to: album)
+        #expect(await store.rescan() == .changed)
+        #expect(await store.database.trackCount() == 2)
+    }
+
     @Test("A file replaced in place is re-read")
     func replacedFileIsReRead() async throws {
         let dir = try makeFolder()
