@@ -74,10 +74,16 @@ struct ScrobbleRow: Sendable {
     let duration: Int?
 }
 
+/// Lowercased album artist → its one spelling, for those spelled more than one way.
+private final class ArtistSpellings: @unchecked Sendable {
+    var byKey: [String: String] = [:]
+}
+
 /// SQLite-backed store. An actor so all database access is serialized; the
 /// sqlite handle never escapes it.
 actor Database {
     private var db: OpaquePointer?
+    private let artistSpellings = ArtistSpellings()
 
     init(path: String) {
         var handle: OpaquePointer?
@@ -86,12 +92,25 @@ actor Database {
             exec("PRAGMA journal_mode=WAL;")
             exec("PRAGMA foreign_keys=ON;")
             migrate()
+            registerArtistName()
+            refreshArtistSpellings()
         } else {
             print("sqlite open failed: \(String(cString: sqlite3_errmsg(handle)))")
         }
     }
 
     deinit { if let db { sqlite3_close(db) } }
+
+    /// `artist_name(x)`: the spelling `refreshArtistSpellings` chose for `x`.
+    private func registerArtistName() {
+        sqlite3_create_function_v2(db, "artist_name", 1, SQLITE_UTF8,
+                                   Unmanaged.passUnretained(artistSpellings).toOpaque(), { ctx, _, argv in
+            guard let arg = argv?[0], let text = sqlite3_value_text(arg) else { return sqlite3_result_null(ctx) }
+            let name = String(cString: text)
+            let spellings = Unmanaged<ArtistSpellings>.fromOpaque(sqlite3_user_data(ctx)).takeUnretainedValue()
+            sqlite3_result_text(ctx, spellings.byKey[name.lowercased()] ?? name, -1, SQLITE_TRANSIENT)
+        }, nil, nil, nil)
+    }
 
     // MARK: - Schema
 
@@ -583,19 +602,37 @@ actor Database {
     // Base columns are qualified with `tracks.` so the FTS JOIN in search()
     // (whose virtual table also has title/artist/album columns) stays unambiguous.
     private let effTitle = "COALESCE(NULLIF(tracks.ov_title,''), tracks.title)"
-    private let effArtist = "COALESCE(NULLIF(tracks.ov_artist,''), tracks.artist)"
-    private let effAlbumArtist = "COALESCE(NULLIF(tracks.ov_album_artist,''), tracks.album_artist)"
+    private let effArtist = "artist_name(COALESCE(NULLIF(tracks.ov_artist,''), tracks.artist))"
+    private let effAlbumArtist = "artist_name(COALESCE(NULLIF(tracks.ov_album_artist,''), tracks.album_artist))"
     private let effComposer = "COALESCE(NULLIF(tracks.ov_composer,''), tracks.composer)"
     private let effTrackNo = "COALESCE(tracks.ov_track_no, tracks.track_no)"
     private let effAlbum = "COALESCE(NULLIF(tracks.ov_album,''), tracks.album)"
-    private let effAlbumArtistGroup = "COALESCE(NULLIF(tracks.ov_album_artist,''), NULLIF(tracks.album_artist,''), NULLIF(tracks.ov_artist,''), NULLIF(tracks.artist,''), 'Unknown Artist')"
+    private let rawAlbumArtistGroup = "COALESCE(NULLIF(tracks.ov_album_artist,''), NULLIF(tracks.album_artist,''), NULLIF(tracks.ov_artist,''), NULLIF(tracks.artist,''), 'Unknown Artist')"
+    private var effAlbumArtistGroup: String { "artist_name(\(rawAlbumArtistGroup))" }
     private let effAlbumGroup = "COALESCE(NULLIF(tracks.ov_album,''), NULLIF(tracks.album,''), 'Unknown Album')"
     /// The directory part of `path`. `replace()` yields every character of the
     /// path except '/', and `rtrim` strips trailing characters in that set — so
     /// it eats the filename and stops at the last separator.
     private let pathFolder = "rtrim(tracks.path, replace(tracks.path, '/', ''))"
 
+    /// Album artists spelled differently only in case are one artist, shown under a
+    /// single spelling: a capitalised one over an all-lowercase one, then the one
+    /// most tracks carry. `artist_name()` applies it inside every query.
+    private func refreshArtistSpellings() {
+        guard let stmt = prepare("SELECT \(rawAlbumArtistGroup), COUNT(*) FROM tracks GROUP BY 1") else { return }
+        defer { sqlite3_finalize(stmt) }
+        var spellings: [String: [(name: String, rank: (Int, Int64))]] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let name = String(cString: sqlite3_column_text(stmt, 0))
+            spellings[name.lowercased(), default: []]
+                .append((name, (name == name.lowercased() ? 0 : 1, sqlite3_column_int64(stmt, 1))))
+        }
+        artistSpellings.byKey = spellings.filter { $0.value.count > 1 }
+            .mapValues { $0.max { $0.rank < $1.rank }!.name }
+    }
+
     func albums() -> [Album] {
+        refreshArtistSpellings()
         let sql = """
         SELECT \(effAlbumArtistGroup) AS aa,
                \(effAlbumGroup) AS al,

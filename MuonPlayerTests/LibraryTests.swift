@@ -19,6 +19,20 @@ struct LibraryTests {
         return m
     }
 
+    @Test("Artists that differ only in case are one artist, shown capitalised")
+    func artistCaseFolds() async {
+        let db = makeDB()
+        await db.upsertTrack(path: "/m/a/1.flac", meta: meta(title: "A", artist: "celebration guns", album: "Old"), hasArtwork: false, mtime: 1)
+        await db.upsertTrack(path: "/m/a/2.flac", meta: meta(title: "B", artist: "celebration guns", album: "Old"), hasArtwork: false, mtime: 1)
+        await db.upsertTrack(path: "/m/b/1.flac", meta: meta(title: "C", artist: "Celebration Guns", album: "New"), hasArtwork: false, mtime: 1)
+        await db.upsertTrack(path: "/m/c/1.flac", meta: meta(title: "Д", artist: "кино", album: "Группа крови"), hasArtwork: false, mtime: 1)
+        await db.upsertTrack(path: "/m/d/1.flac", meta: meta(title: "Е", artist: "Кино", album: "Звезда"), hasArtwork: false, mtime: 1)
+
+        #expect(Set(await db.albums().map(\.artist)) == ["Celebration Guns", "Кино"])
+        #expect(await db.tracks(byAlbumArtist: "Celebration Guns").count == 3)
+        #expect(await db.track(atPath: "/m/a/1.flac")?.effectiveAlbumArtist == "Celebration Guns")
+    }
+
     @Test("Search is case-insensitive (ASCII)")
     func caseInsensitiveAscii() async {
         let db = makeDB()
