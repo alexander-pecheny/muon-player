@@ -54,3 +54,23 @@ struct TextEncodingRepairTests {
         #expect(TextEncodingRepair.repair("Ñåñòðà Ñàøè (Remix)") == "Сестра Саши (Remix)")
     }
 }
+
+@Suite("Raw tag decoding")
+struct TagDecodeTests {
+
+    private func decode(_ bytes: [UInt8]) -> String {
+        (bytes.map(CChar.init(bitPattern:)) + [0]).withUnsafeBufferPointer { TextEncodingRepair.decode($0.baseAddress!) }
+    }
+
+    @Test("Reads a raw CP1251 ID3v1 value as Cyrillic")
+    func rawCP1251() {
+        #expect(decode([0xC4, 0xE5, 0xEC, 0xEE]) == "Демо")
+        #expect(decode([0xC4, 0xF0, 0xF3, 0xE3, 0xE8, 0xE5, 0x20, 0xCF, 0xEE, 0xEB, 0xE3, 0xEE, 0xE4, 0xE0]) == "Другие Полгода")
+    }
+
+    @Test("Keeps UTF-8 and raw Latin-1 intact")
+    func utf8AndLatin1() {
+        #expect(decode(Array(" Сестра Саши ".utf8)) == "Сестра Саши")
+        #expect(decode([0x4D, 0x6F, 0x74, 0xF6, 0x72, 0x68, 0x65, 0x61, 0x64]) == "Motörhead")
+    }
+}

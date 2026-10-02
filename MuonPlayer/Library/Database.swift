@@ -61,8 +61,9 @@ struct TagEdits: Sendable {
 /// after FFmpeg gains a codec, since files it previously could not demux were
 /// indexed with no duration, bitrate or tags (wavpack and APE, at v6; the CP1251
 /// repair learning to see past `÷` and ASCII-heavy titles, at v7; a folder index
-/// that had lost folders written to during a scan, at v8).
-let kScannerVersion: Int32 = 8
+/// that had lost folders written to during a scan, at v8; raw CP1251 ID3v1 tags,
+/// at v9).
+let kScannerVersion: Int32 = 9
 
 /// A pending or completed scrobble row.
 struct ScrobbleRow: Sendable {

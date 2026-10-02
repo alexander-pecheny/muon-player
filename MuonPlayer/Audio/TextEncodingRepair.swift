@@ -14,6 +14,16 @@ import Foundation
 /// with a few accents.
 enum TextEncodingRepair {
 
+    /// A tag value as FFmpeg hands it over. ID3v1 is passed through raw, so a
+    /// CP1251 one is not UTF-8 at all and `String(cString:)` would turn every
+    /// Cyrillic byte into U+FFFD before `repair` could see it.
+    static func decode(_ cString: UnsafePointer<CChar>) -> String {
+        let bytes = Array(UnsafeBufferPointer(start: cString, count: strlen(cString))).map(UInt8.init(bitPattern:))
+        let s = String(bytes: bytes, encoding: .utf8)
+            ?? String(String.UnicodeScalarView(bytes.map(Unicode.Scalar.init)))
+        return repair(s.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     static func repair(_ s: String) -> String {
         guard let bytes = latin1Bytes(of: s), looksLikeCyrillicMojibake(bytes) else { return s }
         guard let candidate = String(bytes: bytes, encoding: .windowsCP1251) else { return s }

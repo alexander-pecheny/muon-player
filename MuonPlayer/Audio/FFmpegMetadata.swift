@@ -123,10 +123,8 @@ enum FFmpegMetadata {
             for key in keys {
                 guard let entry = av_dict_get(dict, key, nil, 0),
                       let v = entry.pointee.value else { continue }
-                let s = String(cString: v).trimmingCharacters(in: .whitespacesAndNewlines)
-                // Undeclared-encoding ID3 frames reach us Latin-1-decoded; recover
-                // the CP1251 text hiding inside.
-                if !s.isEmpty { return TextEncodingRepair.repair(s) }
+                let s = TextEncodingRepair.decode(v)
+                if !s.isEmpty { return s }
             }
             return nil
         }
