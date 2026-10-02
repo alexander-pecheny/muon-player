@@ -701,7 +701,7 @@ actor Database {
         WHERE \(effAlbumArtistGroup) = ?
           AND \(effAlbumGroup) = ?
           AND tracks.year IS ?
-        ORDER BY \(pathFolder) COLLATE NOCASE, disc_no, \(effTrackNo), \(effTitle) COLLATE NOCASE;
+        ORDER BY \(pathFolder) COLLATE NOCASE, COALESCE(disc_no, 1), \(effTrackNo), \(effTitle) COLLATE NOCASE;
         """
         guard let stmt = prepare(sql) else { return [] }
         defer { sqlite3_finalize(stmt) }

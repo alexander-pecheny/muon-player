@@ -561,7 +561,7 @@ final class LibraryStore {
             }
             let tya = a.year ?? Int.max, tyb = b.year ?? Int.max
             if tya != tyb { return tya < tyb }
-            let dna = a.discNo ?? 0, dnb = b.discNo ?? 0
+            let dna = a.discNo ?? 1, dnb = b.discNo ?? 1
             if dna != dnb { return dna < dnb }
             let fa = a.url.deletingLastPathComponent().path, fb = b.url.deletingLastPathComponent().path
             if fa != fb { return fa.localizedStandardCompare(fb) == .orderedAscending }
