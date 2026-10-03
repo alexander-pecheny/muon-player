@@ -197,7 +197,7 @@ struct AlbumDetailView: View {
                 // The leaf folder is what tells two rips apart, so keep its end
                 // visible and drop the path in front of it.
                 Text(group.folder).lineLimit(1).truncationMode(.head)
-                Text(Self.summaryLine(group.tracks)).foregroundStyle(.tertiary)
+                Text(Self.summaryLine(group.tracks)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             Button {
