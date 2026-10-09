@@ -607,13 +607,13 @@ those slices the Mac app silently builds with **no icon at all**.
 
 The 1024 master is generated from `design/icon/icon.js`, which holds the geometry
 and the tuned defaults. It is the only source: the CLI and the live tuner both
-import it. Needs `deno`, `rsvg-convert` (librsvg) and `magick` (imagemagick).
+import it. Needs `bun`, `rsvg-convert` (librsvg) and `magick` (imagemagick).
 
 ```bash
 cd design/icon
-deno task icon                  # writes icon.svg + icon.png, installs AppIcon-1024.png
-deno task icon --cone 0 --tint '#00aafd'   # override any knob from RANGES/COLORS
-deno task lab                   # http://localhost:8000/lab.html — sliders, live preview
+bun run icon                    # writes icon.svg + icon.png, installs AppIcon-1024.png
+bun run icon --cone 0 --tint '#00aafd'     # override any knob from RANGES/COLORS
+bun run lab                     # http://localhost:8000/lab.html — sliders, live preview
 python3 ../../scripts/gen-mac-icon.py      # then regenerate the macOS slices
 ```
 
