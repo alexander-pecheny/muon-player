@@ -73,8 +73,10 @@ enum FFmpegMetadata {
                    params.pointee.sample_rate > 0 {
                     meta.duration = Double(g.validSamples) / Double(params.pointee.sample_rate)
                 }
+                // Vorbis declares an unset nominal bitrate as a negative int32, which
+                // FFmpeg reads back unsigned: 0xFFFFFFFE arrives as 4.29 Gbps.
                 let streamBitrate = params.pointee.bit_rate
-                if streamBitrate > 0 {
+                if streamBitrate > 0, streamBitrate <= Int32.max {
                     meta.bitrate = Int(streamBitrate)
                 }
             }

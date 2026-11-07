@@ -62,8 +62,8 @@ struct TagEdits: Sendable {
 /// indexed with no duration, bitrate or tags (wavpack and APE, at v6; the CP1251
 /// repair learning to see past `÷` and ASCII-heavy titles, at v7; a folder index
 /// that had lost folders written to during a scan, at v8; raw CP1251 ID3v1 tags,
-/// at v9).
-let kScannerVersion: Int32 = 9
+/// at v9; Vorbis files declaring no nominal bitrate, read as 4.29 Gbps, at v10).
+let kScannerVersion: Int32 = 10
 
 /// A pending or completed scrobble row.
 struct ScrobbleRow: Sendable {
