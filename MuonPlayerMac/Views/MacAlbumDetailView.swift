@@ -209,13 +209,15 @@ struct MacAlbumDetailView: View {
         }
     }
 
-    /// "FLAC · 1006 kbps", or just the codecs when the rips differ in bitrate.
+    /// "FLAC · 1006 kbps · 41:26", dropping the bitrate when the rips differ in it.
     private func formatSummary(_ tracks: [Track]) -> String {
         let codecs = Set(tracks.map(\.formatLabel)).sorted()
         let rates = Set(tracks.compactMap(\.bitrateKbps))
-        let codec = codecs.joined(separator: "/")
-        guard rates.count == 1, let kbps = rates.first else { return codec }
-        return "\(codec) · \(kbps) kbps"
+        var parts = [codecs.joined(separator: "/")]
+        if rates.count == 1, let kbps = rates.first { parts.append("\(kbps) kbps") }
+        let total = tracks.compactMap(\.duration).reduce(0, +)
+        if total > 0 { parts.append(formatDuration(total)) }
+        return parts.joined(separator: " · ")
     }
 
     private var header: some View {
