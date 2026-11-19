@@ -45,10 +45,11 @@ for targets/settings.
    and `muon-gapless`, because only the macOS slice carries an Opus *encoder*. `Vendor/` is committed, so usually already present. Rebuild with
    `scripts/build-ffmpeg.sh` (a few minutes) if missing — it reuses any slice
    already built under `.ffmpeg-build/`, so delete a slice dir to force it.
-2. **`MuonPlayer/Secrets.swift`** — `scripts/gen-secrets.sh` generates it from
-   `.env` (Last.fm key/secret + username/password). Both `.env` and `Secrets.swift`
-   are gitignored; a fresh checkout won't compile until this runs. Without valid
-   creds, scrobbling still queues locally but won't submit.
+2. **`MuonPlayer/Secrets.swift`** — `xcodegen generate` writes it first, by running
+   `scripts/gen-secrets.sh` (its `preGenCommand`), from `.env` (Last.fm key/secret).
+   A worktree needs no `.env` of its own: `scripts/dotenv.sh` falls back to the main
+   checkout's, and `testflight.sh` reads it the same way. Both files are gitignored.
+   With no `.env` anywhere it still builds; scrobbling queues locally but won't submit.
 
 ## Build & test (simulator)
 

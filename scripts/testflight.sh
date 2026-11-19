@@ -11,7 +11,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-[ -f "$ROOT/.env" ] && { set -a; source "$ROOT/.env"; set +a; }
+source "$ROOT/scripts/dotenv.sh"
 
 PLATFORM="${1:-ios}"
 : "${DEVELOPMENT_TEAM:?set DEVELOPMENT_TEAM}"

@@ -1,5 +1,7 @@
 name: MuonPlayer
 options:
+  # Secrets.swift is gitignored but compiled in, so it must exist before generation.
+  preGenCommand: scripts/gen-secrets.sh
   bundleIdPrefix: me.pecheny
   deploymentTarget:
     iOS: "17.0"
